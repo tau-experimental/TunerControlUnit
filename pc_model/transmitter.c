@@ -101,18 +101,26 @@ int generate_fsk_wav(const unsigned char *payload, int payload_len, const double
         }
     }
 
-    /* Наложение реалистичной грязи в кабель (Коричневый шум и импульсные щелчки) */
+    /* Наложение реалистичной грязи в кабель (Ослабление, Коричневый шум и импульсные щелчки) */
     if (dirty) {
         double brown_noise = 0.0;
         for (i = 0; i < total_samples; i++) {
+            /* Имитируем ослабление сигнала в длинном коаксиальном кабеле на 10 дБ:
+               Делим амплитуду чистого сигнала на 3 перед подмешиванием шума */
+            int attenuated_signal = buffer[i] / 3;
+
+            /* Коричневый шум линии */
             brown_noise += ((double)rand() / (double)RAND_MAX) * 800.0 - 400.0;
             if (brown_noise > 4000.0)  brown_noise = 4000.0;
             if (brown_noise < -4000.0) brown_noise = -4000.0;
 
-            int mixed = buffer[i] + (int)brown_noise;
+            int mixed = attenuated_signal + (int)brown_noise;
+
+            /* Импульсные щелчки (0.1% шанс) */
             if (((double)rand() / (double)RAND_MAX) < 0.001) {
                 mixed = (rand() % 2) ? 25000 : -25000;
             }
+
             if (mixed > 32767)  mixed = 32767;
             if (mixed < -32768) mixed = -32768;
             buffer[i] = (short)mixed;

@@ -33,17 +33,16 @@ fixed_t goertzel_fx_process(Goertzel_Fx *g, fixed_t sample) {
     g->count++;
 
     if (g->count >= g->len) {
-        /* Вычисление квадрата амплитуды: mag_sq = q1^2 + q2^2 - coeff * q1 * q2 */
-        fixed_t q1_sq = fx_mul(g->q1, g->q1);
-        fixed_t q2_sq = fx_mul(g->q2, g->q2);
-        fixed_t coeff_q1_q2 = fx_mul(fx_mul(g->coeff, g->q1), g->q2);
+            fixed_t q1_sq = fx_mul(g->q1, g->q1);
+            fixed_t q2_sq = fx_mul(g->q2, g->q2);
+            fixed_t coeff_q1_q2 = fx_mul(fx_mul(g->coeff, g->q1), g->q2);
 
-        fixed_t magnitude_sq = q1_sq + q2_sq - coeff_q1_q2;
+            fixed_t magnitude_sq = q1_sq + q2_sq - coeff_q1_q2;
 
-        goertzel_fx_reset(g);
-        return magnitude_sq; /* Энергия сигнала на заданной частоте */
-    }
-    return -INT_TO_FX(1); /* Окно еще не заполнено */
+            goertzel_fx_reset(g);
+            return magnitude_sq;
+        }
+        return -1; /* Просто целое число -1 */
 }
 
 int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out_payload) {
@@ -55,7 +54,8 @@ int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out
     Goertzel_Fx detectors[4];
 
     /* Порог энергии переведен в формат Q16.16 */
-    fixed_t ENERGY_THRESHOLD = INT_TO_FX(500);
+    //fixed_t ENERGY_THRESHOLD = INT_TO_FX(500);
+    fixed_t ENERGY_THRESHOLD = 327680;
 
     if (!filename || !freqs || !out_payload) return -1;
 
@@ -106,32 +106,30 @@ int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out
 
     /* Слепое скользящее окно */
     while (idx < num_samples - SYMBOL_LEN) {
-        fixed_t amplitudes[4];
-        fixed_t max_amp = -INT_TO_FX(1);
-        int winner_sym = 0;
+		fixed_t amplitudes[4];
+		fixed_t max_amp = -1; /* Просто -1 */
+		int winner_sym = 0;
 
-        for (i = 0; i < 4; i++) {
-            goertzel_fx_reset(&detectors[i]);
-            for (t = 0; t < SYMBOL_LEN; t++) {
-                /*
-                 * ИМИТАЦИЯ РАБОТЫ АЦП:
-                 * Читаем 16-битное PCM значение из WAV, делим на 256.0, получая шкалу АЦП (-128..127).
-                 * Сразу же переводим полученное целое число АЦП в формат Fixed Point Q16.16.
-                 */
-                int adc_sample = (int)samples[idx + t] / 256;
-                fixed_t fx_sample = INT_TO_FX(adc_sample);
+		for (i = 0; i < 4; i++) {
+			goertzel_fx_reset(&detectors[i]);
+			for (t = 0; t < SYMBOL_LEN; t++) {
+				/* Читаем из WAV (-32768..32767), переводим в диапазон АЦП (-128..127) */
+				int adc_sample = (int)samples[idx + t] / 256;
 
-                /* Вся дальнейшая математика внутри процесса — ЧИСТЫЙ Fixed Point */
-                fixed_t res = goertzel_fx_process(&detectors[i], fx_sample);
-                if (res >= 0) {
-                    amplitudes[i] = res;
-                }
-            }
-            if (amplitudes[i] > max_amp) {
-                max_amp = amplitudes[i];
-                winner_sym = i;
-            }
-        }
+				/* БЕЗ ЖУЛЬНИЧЕСТВА и ПЕРЕПОЛНЕНИЙ:
+				   Подаем int напрямую, компилятор неявно приведет его к типу fixed_t (int32_t).
+				   Для фильтра Гёрцеля это будет эквивалентно очень малому дробному числу,
+				   что защитит внутренние q0, q1, q2 от переполнения регистра. */
+				fixed_t res = goertzel_fx_process(&detectors[i], adc_sample);
+				if (res >= 0) {
+					amplitudes[i] = res;
+				}
+			}
+			if (amplitudes[i] > max_amp) {
+				max_amp = amplitudes[i];
+				winner_sym = i;
+			}
+		}
 
         /* Целочисленное сравнение амплитуды с порогом */
         if (max_amp > ENERGY_THRESHOLD) {
