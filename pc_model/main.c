@@ -374,19 +374,23 @@ void test_step_5_2_dirty_synchronous(void) {
     printf("[STEP 5.2] Проверка посимвольного распознавания грязного сигнала на ЖЕСТКОЙ сетке часов...\n");
 
     unsigned char test_payload[] = {0x11, 0x22, 0x33, 0x44};
+    int test_payload_length = sizeof(test_payload)/sizeof(unsigned char);
     unsigned char rx_buffer[MAX_PAYLOAD];
     int len, i;
+    int dirty = 1;
 
     /* Генерируем грязный файл, но БЕЗ начальной паузы и преамбулы (dirty=1, но логика "в стык" в transmitter.c подправлена) */
     /* В transmitter.c при генерации для этого теста временно важна жесткая сетка.
        Мы используем функцию decode_fsk_wav, но добавим в нее вызов apply_hard_limiter! */
-    printf("  -> Генерируем грязный пакет...\n");
-    generate_fsk_wav(test_payload, 4, FREQ_DOWNLINK, "stage5_2_dirty_sync.wav", 1);
+    printf("  -> Генерируем %s пакет из %d байт payload...\n",
+    		((dirty == 1)?"РЕАЛИСТИЧНО-ГРЯЗНЫЙ":"ЛАБОРАТОРНО-ЧИСТЫЙ"),
+			test_payload_length);
+    generate_fsk_wav(test_payload, 4, FREQ_DOWNLINK, "stage5_2_dirty_sync.wav", dirty);
 
     /* Запускаем НАШ ДИНАМИЧЕСКИЙ ПРИЕМНИК, который мы калибровали под порог 100 */
 	len = decode_fsk_wav_dynamic("stage5_2_dirty_sync.wav", FREQ_DOWNLINK, rx_buffer);
 
-	if (len == 4) {
+	if (len == test_payload_length) {
 		printf("  -> [SUCCESS] ДИНАМИЧЕСКИЙ АВТОМАТ ПОБЕДИЛ ШУМЫ КАБЕЛЯ!\n");
 		printf("     Принято полезных данных: ");
 		for (i = 0; i < len; i++) printf("%02X ", rx_buffer[i]);

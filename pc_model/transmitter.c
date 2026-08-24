@@ -30,14 +30,9 @@ int generate_fsk_wav(const unsigned char *payload, int payload_len, const double
 
     /*
      * ОПРЕДЕЛЕНИЕ СТРУКТУРЫ КАДРА В ЗАВИСИМОСТИ ОТ РЕЖИМА
-     * Если dirty == 1, нам нужна преамбула (16 символов чередования 0 и 2) для захвата часов.
-     * Если dirty == 0, мы генерируем голый пакет "в стык" для Этапа 3 и 4.
+     * преамбула (16 символов чередования 0 и 2) для захвата часов нужна всегда
      */
-    if (dirty) {
-        preamble_symbols = 16; /* Чередование частот для Clock Recovery */
-    } else {
-        preamble_symbols = 0;  /* Без преамбулы */
-    }
+    preamble_symbols = 16; /* Чередование частот для Clock Recovery */
 
     /* Структура кадра: SOF (1 байт) + Len (1 байт) + Payload + CRC (1 байт) */
     total_bytes = 1 + 1 + payload_len + 1;
@@ -45,15 +40,15 @@ int generate_fsk_wav(const unsigned char *payload, int payload_len, const double
     total_symbols = preamble_symbols + data_symbols;
 
     /* Расчет пауз */
-    if (dirty) {
+    //if (dirty) {
         double_rand = (double)rand() / (double)RAND_MAX;
         pause_sec = 0.3 + double_rand * 0.4; /* Рандомная пауза 0.3 ... 0.7 сек */
         pause_samples = (int)(pause_sec * FS);
         end_samples = (int)(0.1 * FS);
-    } else {
-        pause_samples = 0;
-        end_samples = 0;
-    }
+    //} else {
+    //    pause_samples = 0;
+    //    end_samples = 0;
+    //}
 
     signal_samples = total_symbols * SYMBOL_LEN;
     total_samples = pause_samples + signal_samples + end_samples;
@@ -80,14 +75,6 @@ int generate_fsk_wav(const unsigned char *payload, int payload_len, const double
         crc = update_crc8(crc, payload[i]);
     }
 
-    s_idx = preamble_symbols;
-    byte_to_symbols(SOF_BYTE, &raw_symbols[s_idx]); s_idx += 4; /* Помним, что byte_to_symbols бьет на 4 части, перепишем ниже под биты! */
-
-    /*
-     * Стоп! Функция byte_to_symbols из common.c бьет байт на 4 двухбитных символа!
-     * Но в нашей новой 9-битной дифференциальной схеме мы не должны использовать byte_to_symbols!
-     * Мы упаковываем байты побитно прямо в массив raw_symbols!
-     */
     s_idx = preamble_symbols;
 
     // Упаковка SOF (0x7E)

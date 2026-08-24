@@ -40,6 +40,7 @@ unsigned char calculate_odd_parity(unsigned char data_byte) {
 }
 
 unsigned char scramble_bit(unsigned char bit, unsigned char prev_encoded_sym) {
+#if 1
     unsigned char p = prev_encoded_sym % 3;
     if ((bit & 0x01) == 0) {
         /* Бит 0: шаг по часовой стрелке (+1) */
@@ -48,6 +49,9 @@ unsigned char scramble_bit(unsigned char bit, unsigned char prev_encoded_sym) {
         /* Бит 1: шаг против часовой стрелки (-1, что в поле %3 равно +2) */
         return (p + 2) % 3;
     }
+#else
+
+#endif
 }
 
 /*
@@ -56,6 +60,7 @@ unsigned char scramble_bit(unsigned char bit, unsigned char prev_encoded_sym) {
  * Возвращает восстановленный бит (0 или 1).
  */
 unsigned char descramble_bit(unsigned char encoded_sym, unsigned char prev_encoded_sym) {
+#if 1
     unsigned char p = prev_encoded_sym % 3;
     unsigned char e = encoded_sym % 3;
 
@@ -69,4 +74,29 @@ unsigned char descramble_bit(unsigned char encoded_sym, unsigned char prev_encod
     }
 
     return 0; /* Дефолтный возврат при ошибке (сдвиг 0 физически невозможен) */
+#else
+    int delta = encoded_sym - prev_encoded_sym;
+    unsigned char current_bit = 0;
+    if (delta < 0) {
+        delta += 3;
+    }
+
+    // Теперь строго по вашему правилу:
+    if (delta == 1) {
+        // 0->1, 1->2, 2->0 (Частота увеличилась)
+        current_bit = 1;
+    }
+    else if (delta == 2) {
+        // 0->2, 2->1, 1->0 (Частота уменьшилась)
+        current_bit = 0;
+    }
+    else {
+        // delta == 0: Частота НЕ изменилась (по вашему правилу это ЗАПРЕЩЕНО)
+        // Это маркер того, что мы либо стоим на шуме, либо просели по синхронизации!
+        //signal_error_handler();
+        printf ("Аномалия битового декодера: delta = %d\n", delta);
+        exit(-100);
+    }
+    return current_bit;
+#endif
 }
