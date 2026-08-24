@@ -54,7 +54,6 @@ int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out
     Goertzel_Fx detectors[4];
 
     /* Базовый порог для новой 64-битной математики */
-    fixed_t ENERGY_THRESHOLD = INT_TO_FX(100);
 
     if (!filename || !freqs || !out_payload) return -1;
 
@@ -86,97 +85,108 @@ int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out
     fclose(f_in);
 
     for (i = 0; i < 4; i++) {
-        goertzel_fx_init(&detectors[i], freqs[i], SYMBOL_LEN);
-    }
+		goertzel_fx_init(&detectors[i], freqs[i], SYMBOL_LEN);
+	}
 
-    max_possible_syms = num_samples / SYMBOL_LEN * 4;
-    rx_symbols = (unsigned char *)malloc(max_possible_syms);
-    if (!rx_symbols) {
-        free(samples);
-        return -1;
-    }
+	max_possible_syms = num_samples / SYMBOL_LEN * 4;
+	rx_symbols = (unsigned char *)malloc(max_possible_syms);
+	if (!rx_symbols) {
+		free(samples);
+		return -1;
+	}
 
-    rx_sym_count = 0;
-    in_packet = 0;
-    expected_symbols = 9999;
-    payload_len = 0;
-    idx = 0;
+	rx_sym_count = 0;
+	in_packet = 0;
+	expected_symbols = 9999;
+	payload_len = 0;
 
-    printf("\n--- СТАРТ ЦОС ДЕМОДУЛЯЦИИ ФАЙЛА: %s ---\n", filename);
+	/* Переменная состояния синхронизации битовых часов */
+	int bit_clock_synced = 0;
+	fixed_t ENERGY_THRESHOLD = INT_TO_FX(150); /* Порог уверенного захвата преамбулы */
 
-    while (idx < num_samples - SYMBOL_LEN) {
-        fixed_t amplitudes[4] = {0, 0, 0, 0};
-        fixed_t max_amp = -INT_TO_FX(1);
-        int winner_sym = 0;
+	printf("\n--- СТАРТ ДВУХФАЗНОЙ ДЕМОДУЛЯЦИИ ФАЙЛА: %s ---\n", filename);
 
-        for (i = 0; i < 4; i++) {
-            goertzel_fx_reset(&detectors[i]);
-            for (t = 0; t < SYMBOL_LEN; t++) {
-                int adc_sample = (int)samples[idx + t] / 256;
+	idx = 0;
+	while (idx < num_samples) {
+		int adc_sample = (int)samples[idx] / 256;
+		fixed_t fx_sample = INT_TO_FX(adc_sample) / 4;
 
-                /* Переводим в Q16.16 и делим на 4.
-                   Амплитуда синуса на входе фильтра будет ~31. Это защитит от переполнений */
-                fixed_t fx_sample = INT_TO_FX(adc_sample) / 4;
+		fixed_t amplitudes[4] = {-1, -1, -1, -1};
+		int window_ready = 0;
 
-                fixed_t res = goertzel_fx_process(&detectors[i], fx_sample);
-                if (res >= 0) {
-                    amplitudes[i] = res;
-                }
-            }
-            if (amplitudes[i] > max_amp) {
-                max_amp = amplitudes[i];
-                winner_sym = i;
-            }
-        }
+		for (i = 0; i < 4; i++) {
+			fixed_t res = goertzel_fx_process(&detectors[i], fx_sample);
+			if (res >= 0) {
+				amplitudes[i] = res;
+				window_ready = 1;
+			}
+		}
 
-        /*
-         * =====================================================================
-         * БЛОК ОТИЛАДКИ ЦОС: ПЕЧАТЬ ЭВОЛЮЦИИ ДАННЫХ
-         * Выводим состояние, если обнаружен всплеск энергии на любой частоте
-         * =====================================================================
-         */
-        if (max_amp > (ENERGY_THRESHOLD / 4) && max_amp != -INT_TO_FX(1)) {
-            printf("SampleIdx: %5d | E0(%.1fHz): %7.2f | E1(%.1fHz): %7.2f | E2(%.1fHz): %7.2f | E3(%.1fHz): %7.2f | WIN: %d (Amp: %7.2f) %s\n",
-                   idx,
-                   freqs[0], FX_TO_DOUBLE(amplitudes[0]),
-                   freqs[1], FX_TO_DOUBLE(amplitudes[1]),
-                   freqs[2], FX_TO_DOUBLE(amplitudes[2]),
-                   freqs[3], FX_TO_DOUBLE(amplitudes[3]),
-                   winner_sym, FX_TO_DOUBLE(max_amp),
-                   (max_amp > ENERGY_THRESHOLD) ? "[ABOVE THRESHOLD]" : "");
-        }
+		if (window_ready) {
+			fixed_t max_amp = -1;
+			int winner_sym = 0;
 
-        /* Логика фиксации превышения порога */
-        if (max_amp > ENERGY_THRESHOLD) {
-			rx_symbols[rx_sym_count++] = (unsigned char)winner_sym;
-
-			/* Поиск маркера SOF (0x7E) в потоке символов */
-			if (!in_packet && rx_sym_count >= 4) {
-				int last_idx = rx_sym_count - 4;
-				unsigned char test_sof = (rx_symbols[last_idx] << 6) |
-										 (rx_symbols[last_idx+1] << 4) |
-										 (rx_symbols[last_idx+2] << 2) |
-										 rx_symbols[last_idx+3];
-
-				if (!in_packet) {
-					printf("   -> [SCAN] Собрали байт для проверки SOF: 0x%02X\n", test_sof);
+			for (i = 0; i < 4; i++) {
+				if (amplitudes[i] > max_amp) {
+					max_amp = amplitudes[i];
+					winner_sym = i;
 				}
+			}
 
-				if (test_sof == SOF_BYTE) {
-					in_packet = 1;
-					rx_sym_count = 0; /* Фаза поймана, сбрасываем преамбулу */
-					printf("   ===> [SYNC] Маркер SOF обнаружен! Фаза захвачена на отсчете: %d <===\n", idx);
+			/* Если мы еще не синхронизировали символьные часы по преамбуле */
+			if (!bit_clock_synced) {
+				/* Ждем, когда в кабель прилетит сильный сигнал частоты преамбулы (WIN: 2, 1800Гц) */
+				if (max_amp > ENERGY_THRESHOLD && winner_sym == 2) {
+					bit_clock_synced = 1;
+					printf("   ===> [CLOCK] Символьные часы захвачены на SampleIdx: %d (Amp: %.2f) <===\n",
+						   idx, FX_TO_DOUBLE(max_amp));
+
+					/* Забираем первый символ преамбулы */
+					rx_symbols[rx_sym_count++] = (unsigned char)winner_sym;
+
+					/* Мгновенно переключаем шаг на жесткий дискретный режим!
+					   Следующая выборка будет сделана ровно через 16 отсчетов, в центре следующего символа */
+					idx += SYMBOL_LEN;
+					continue;
+				}
+			} else {
+				/* МЫ В РЕЖИМЕ ЖЕСТКИХ ЧАСОВ: Каждая детекция — это один честный физический символ */
+				rx_symbols[rx_sym_count++] = (unsigned char)winner_sym;
+
+				/* Печатаем чистый шаг символов */
+				printf("SymIdx: %3d | WIN: %d | Amp: %7.2f | ", rx_sym_count, winner_sym, FX_TO_DOUBLE(max_amp));
+
+				/* Сборка байта из 4 символов для проверки структуры кадра */
+				if (rx_sym_count % 4 == 0) {
+					int last_idx = rx_sym_count - 4;
+					unsigned char assembled_byte = (rx_symbols[last_idx] << 6) |
+												   (rx_symbols[last_idx+1] << 4) |
+												   (rx_symbols[last_idx+2] << 2) |
+												   rx_symbols[last_idx+3];
+
+					printf("Assembled Byte: 0x%02X\n", assembled_byte);
+
+					/* Ищем маркер SOF */
+					if (!in_packet && assembled_byte == SOF_BYTE) {
+						in_packet = 1;
+						rx_sym_count = 0; /* Сбрасываем преамбулу, начинаем копить тело пакета */
+						printf("   ===> [SYNC] Маркер SOF (0x7E) успешно распознан! Начинаем прием данных кадра.\\n");
+					}
+				} else {
+					printf("\n");
 				}
 			}
 
 			if (in_packet) {
-				/* Шаг 1: Извлекаем длину пакета */
+				/* Шаг 1: Извлекаем длину пакета (когда накопилось первые 4 символа данных после SOF) */
 				if (rx_sym_count == 4 && expected_symbols == 9999) {
 					payload_len = (rx_symbols[0] << 6) | (rx_symbols[1] << 4) | (rx_symbols[2] << 2) | rx_symbols[3];
-					printf("   -> [PACKET] Обнаружен байт длины: %d байт\n", payload_len);
+					printf("   -> [PACKET] Длина полезной нагрузки: %d байт\n", payload_len);
 
 					if (payload_len > MAX_PAYLOAD || payload_len <= 0) {
+						printf("   -> [ERROR] Битый заголовок длины. Сброс линии.\n");
 						in_packet = 0;
+						bit_clock_synced = 0;
 						rx_sym_count = 0;
 						expected_symbols = 9999;
 					} else {
@@ -202,37 +212,25 @@ int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out
 					free(rx_symbols);
 
 					if (calc_crc == rx_crc) {
-						return payload_len; /* УСПЕХ! */
+						return payload_len; /* ПОЛНЫЙ УСПЕХ! */
 					} else {
 						return -2; /* Ошибка контрольной суммы */
 					}
 				}
 			}
 
-			/* КРИТИЧЕСКИЙ ФИКС ЦОС:
-			   Поскольку мы зафиксировали честный символ, мы прыгаем сразу на 16 отсчетов вперед,
-			   чтобы следующий цикл анализировал уже следующий физический символ, а не фазовый сдвиг этого же. */
-            /*
-             * КРИТИЧЕСКИЙ ФИКС СИНХРОНИЗАЦИИ:
-             * Если мы уже НАХОДИМСЯ внутри пакета (SOF успешно пойман),
-             * мы шагаем жестко по телу символов, перескакивая через 16 отсчетов.
-             * Если мы еще ИЩЕМ маркер SOF — мы обязаны скользить по 1 отсчету (idx++),
-             * чтобы поймать идеальную фазовую границу кадра.
-             */
-            if (in_packet) {
-                idx += SYMBOL_LEN;
-            } else {
-                idx++;
-            }
+			/* Если символьные часы уже запущены, мы всегда прыгаем блоками по 16 отсчетов */
+			if (bit_clock_synced) {
+				idx += SYMBOL_LEN;
+				continue;
+			}
+		}
 
-        } else {
-            /* Если энергии нет (тишина) — плавно скользим по 1 отсчету */
-            idx++;
-        }
-    }
+		/* Если часы не запущены или тишина — скользим плавно по 1 отсчету */
+		idx++;
+	}
 
-    free(samples);
-    free(rx_symbols);
-    return -1;
+	free(samples);
+	free(rx_symbols);
+	return -1;
 }
-
