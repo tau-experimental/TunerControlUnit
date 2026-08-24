@@ -1,0 +1,18 @@
+# Eclipse / CDT project files (если не хотите делить настройки среды с другими)
+.metadata/
+.config/
+*.local
+*.app
+
+# Папки сборки GCC / Eclipse
+Debug/
+Release/
+bin/
+obj/
+
+# Временные файлы компиляции
+*.o
+*.d
+
+# Сгенерированные нашей моделью кабели-файлы
+*.wav
