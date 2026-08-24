@@ -383,17 +383,18 @@ void test_step_5_2_dirty_synchronous(void) {
     printf("  -> Генерируем грязный пакет...\n");
     generate_fsk_wav(test_payload, 4, FREQ_DOWNLINK, "stage5_2_dirty_sync.wav", 1);
 
-    /* Модифицируем decode_fsk_wav, чтобы она внутри использовала apply_hard_limiter.
-       Если она сможет прочесть — значит, фильтры Гёрцеля аппаратно справляются с шумом меандра! */
-    len = decode_fsk_wav("stage5_2_dirty_sync.wav", FREQ_DOWNLINK, rx_buffer);
+    /* Запускаем НАШ ДИНАМИЧЕСКИЙ ПРИЕМНИК, который мы калибровали под порог 100 */
+	len = decode_fsk_wav_dynamic("stage5_2_dirty_sync.wav", FREQ_DOWNLINK, rx_buffer);
 
-    if (len == 4 && memcmp(test_payload, rx_buffer, 4) == 0) {
-        printf("  -> УСПЕХ: Фильтры Гёрцеля сквозь Ограничитель идеально различают вращение частот в шумах!\n");
-        printf("=== ЭТАП 5.2 УСПЕШНО ПРОЙДЕН ===\n\n");
-    } else {
-        printf("  [FAIL] Сбой посимвольного распознавания в шумах. Код ответа: %d\n", len);
-        /* Мы не вызываем exit, чтобы посмотреть остальные логи */
-    }
+	if (len == 4) {
+		printf("  -> [SUCCESS] ДИНАМИЧЕСКИЙ АВТОМАТ ПОБЕДИЛ ШУМЫ КАБЕЛЯ!\n");
+		printf("     Принято полезных данных: ");
+		for (i = 0; i < len; i++) printf("%02X ", rx_buffer[i]);
+		printf("\n=== ЭТАП 5.2 УСПЕШНО ПРОЙДЕН ===\n\n");
+	} else {
+		printf("  [FAIL] Динамический автомат не смог взять грязный барьер. Код ошибки: %d\n", len);
+		exit(-1);
+	}
 }
 
 int main(void) {

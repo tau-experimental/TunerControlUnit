@@ -257,6 +257,9 @@ int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned c
     unsigned char *rx_symbols;
     Goertzel_Fx detectors[3];
 
+    fixed_t history_buffer[SYMBOL_LEN] = {0};
+    int history_idx = 0;
+
     if (!filename || !freqs || !out_payload) return -1;
     f_in = fopen(filename, "rb");
     if (!f_in) return -1;
@@ -274,15 +277,13 @@ int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned c
     int bit_clock_synced = 0;
     int last_winner = -1;
     int transition_idx = -1;
+    int synced_symbol_counter = 0;
 
-    /*
-     * ТЮНИНГ ПОРОГА ДЛЯ СЛУЧАЙНОЙ ПАУЗЫ:
-     * Выставляем порог в 40 единиц. Наш полезный сигнал (94..108) пробьет его
-     * со стопроцентной гарантией, а шум в паузе (0.0) останется снизу.
-     */
     fixed_t ENERGY_THRESHOLD = INT_TO_FX(40);
 
-    printf("\n--- СТАРТ ДИНАМИЧЕСКОГО ПРИЕМНИКА (ЭТАП 5) ---\n");
+    printf("\n======================================================================\n");
+    printf("[ДИНАМИЧЕСКАЯ ТЕЛЕМЕТРИЯ] Слепой поиск в файле: %s\n", filename);
+    printf("======================================================================\n");
 
     idx = 0;
     while (idx < num_samples - SYMBOL_LEN) {
@@ -290,10 +291,8 @@ int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned c
         fixed_t max_amp = -1;
         int winner_sym = 0;
 
-        /* Очищаем Блочный Гёрцель */
         for (i = 0; i < 3; i++) goertzel_fx_reset(&detectors[i]);
 
-        /* Анализируем окно из 32 отсчетов от текущего 'idx' */
         for (t = 0; t < SYMBOL_LEN; t++) {
             int adc_sample = (int)samples[idx + t] / 256;
             fixed_t fx_sample = apply_hard_limiter(adc_sample);
@@ -311,41 +310,49 @@ int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned c
             }
         }
 
-        /* ФАЗА 0: СЛЕПОЙ ПОИСК ПЕРЕКЛЮЧЕНИЙ ПРЕАМБУЛЫ (ШАГ ПО 1 ОТСЧЕТУ) */
+        /* ФАЗА 0: СЛЕПОЙ ПОИСК ПЕРЕКЛЮЧЕНИЙ ПРЕАМБУЛЫ */
         if (!bit_clock_synced) {
             if (max_amp > ENERGY_THRESHOLD) {
                 if (last_winner != -1 && winner_sym != last_winner) {
-                    /* Нашли фронт переключения частот! */
                     if (transition_idx == -1) {
                         transition_idx = idx;
                     } else {
                         int delta_time = idx - transition_idx;
-                        /* Если расстояние между переключениями совпало с длительностью символа */
                         if (delta_time >= (SYMBOL_LEN - 3) && delta_time <= (SYMBOL_LEN + 3)) {
-                            printf("   ===> [CLOCK] Сетка битовых часов защелкнута на отсчете: %d! (Delta: %d) <===\n", idx, delta_time);
+                            printf("\n===> [CLOCK] Битовые часы зафиксированы! Отсчет: %d (Delta: %d) <===\n", idx, delta_time);
                             bit_clock_synced = 1;
+                            synced_symbol_counter = 0;
 
-                            /* Прыгаем в центр следующего стабильного символа */
+                            /* Прыгаем на пол-символа вперед в центр плато */
                             idx += (SYMBOL_LEN / 2);
                             last_winner = winner_sym;
                             continue;
                         } else {
-                            transition_idx = idx; /* Глитч шума, перезахват */
+                            transition_idx = idx;
                         }
                     }
                 }
                 last_winner = winner_sym;
             }
-            idx++; /* В режиме поиска скользим плавно по 1 отсчету */
+            idx++;
             continue;
         }
 
-        /* ФАЗА 1: ДИСКРЕТНЫЙ ПРИЕМ ПАКЕТА (ЖЕСТКИЙ ШАГ ПО СИМВОЛАМ) */
+        /* ФАЗА 1: ДИСКРЕТНЫЙ ПРИЕМ СИМВОЛОВ НА УДЕРЖАННЫХ ЧАСАХ */
+        synced_symbol_counter++;
         unsigned char decoded_bit = descramble_bit(winner_sym, last_winner);
-        last_winner = winner_sym;
 
+        int bit_pos_in_byte = (synced_symbol_counter - 1) % BITS_PER_BYTE;
+
+        printf("  Шаг %3d | Бит %d/9 | E0:%5.1f | E1:%5.1f | E2:%5.1f | WIN:F%d (Ref:F%d) -> БИТ: %d\n",
+               synced_symbol_counter, bit_pos_in_byte + 1,
+               FX_TO_DOUBLE(amplitudes[0]), FX_TO_DOUBLE(amplitudes[1]), FX_TO_DOUBLE(amplitudes[2]),
+               winner_sym, last_winner, decoded_bit);
+
+        last_winner = winner_sym;
         rx_symbols[rx_sym_count++] = decoded_bit;
 
+        /* Обработка по границам 9-битных посылок */
         if (rx_sym_count >= BITS_PER_BYTE && rx_sym_count % BITS_PER_BYTE == 0) {
             int byte_start_pos = rx_sym_count - BITS_PER_BYTE;
             unsigned char assembled_byte = 0;
@@ -356,20 +363,29 @@ int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned c
 
             unsigned char rx_parity = rx_symbols[byte_start_pos + 8];
             unsigned char local_parity = calculate_odd_parity(assembled_byte);
+            int parity_ok = (rx_parity == local_parity);
 
-            if (rx_parity != local_parity) {
+            printf(" => ДИНАМИЧЕСКИЙ БАЙТ: [ %02X.%d ] | Local Parity: %d -> %s\n",
+                   assembled_byte, rx_parity, local_parity,
+                   parity_ok ? "СОВПАЛ" : "ОШИБКА ЧЁТНОСТИ");
+
+            if (!parity_ok) {
                 if (!in_packet) {
-                    /* Мусор в паузе ложно прикинулся байтом — сбрасываем часы */
-                    bit_clock_synced = 0; transition_idx = -1; rx_sym_count = 0; idx++; continue;
+                    /* Фикс стабильности: в преамбуле из-за шума границы могут плавать.
+                       Вместо жесткого сброса часов, давайте просто пропустим битый байт преамбулы
+                       и продолжим идти по жесткой сетке! Настоящий МК никогда не сбрасывает таймер
+                       из-за одной ошибки четности в преамбуле! */
+                    printf("    [PREAMBLE WARN] Сбой паритета в преамбуле проигнорирован. Удерживаем часы.\n");
                 } else {
-                    free(samples); free(rx_symbols); return -2; /* Ошибка четности в пакете */
+                    printf("    [FAIL] КРИТИЧЕСКАЯ ОШИБКА ЧЁТНОСТИ ВНУТРИ ПАКЕ ТА! Сброс.\n");
+                    free(samples); free(rx_symbols); return -2;
                 }
             }
 
             if (!in_packet && assembled_byte == SOF_BYTE) {
                 in_packet = 1;
                 rx_sym_count = 0;
-                printf("   ===> [SYNC] Маркер SOF (0x7E) успешно распознан из шума! Принимаем данные... <===\n");
+                printf("\n   ===> [SYNC] Маркер кадра SOF (0x7E) обнаружен! Читаем Payload... <===\n");
                 idx += SYMBOL_LEN;
                 continue;
             }
@@ -377,7 +393,9 @@ int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned c
             if (in_packet) {
                 if (rx_sym_count == BITS_PER_BYTE) {
                     payload_len = assembled_byte;
+                    printf("   -> [PACKET] Ожидаемая длина Payload: %d байт\n", payload_len);
                     if (payload_len > MAX_PAYLOAD || payload_len <= 0) {
+                        printf("    [ERROR] Битый байт длины, сброс автомата.\n");
                         in_packet = 0; bit_clock_synced = 0; transition_idx = -1; rx_sym_count = 0; expected_symbols = 9999;
                     } else {
                         expected_symbols = (1 + payload_len + 1) * BITS_PER_BYTE;
@@ -400,6 +418,9 @@ int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned c
                     unsigned char rx_crc = 0;
                     for (t = 0; t < 8; t++) rx_crc |= (rx_symbols[p_idx + t] << (7 - t));
 
+                    printf("\n--- ВЕРИФИКАЦИЯ КОНТРОЛЬНОЙ СУММЫ ДИНАМИЧЕСКОГО КАДРА ---\n");
+                    printf("    Рассчитано: 0x%02X | Принято: 0x%02X\n", calc_crc, rx_crc);
+
                     free(samples); free(rx_symbols);
                     if (calc_crc == rx_crc) return payload_len;
                     return -3;
@@ -407,10 +428,9 @@ int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned c
             }
         }
 
-        idx += SYMBOL_LEN; /* Прыгаем по центрам плато символов */
+        idx += SYMBOL_LEN;
     }
 
     free(samples); free(rx_symbols);
     return -1;
 }
-
