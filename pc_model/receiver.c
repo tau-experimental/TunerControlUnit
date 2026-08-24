@@ -135,7 +135,7 @@ int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out
             idx = total_symbol_counter * SYMBOL_LEN;
             total_symbol_counter++;
 
-            fixed_t amplitudes[3] = {0, 0, 0};
+            fixed_t amplitudes[3] = {-INT_TO_FX(1), -INT_TO_FX(1), -INT_TO_FX(1)};
             fixed_t max_amp = -1;
             int winner_sym = 0;
 
