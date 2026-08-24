@@ -8,9 +8,9 @@ unsigned char update_crc8(unsigned char crc, unsigned char data) {
     crc ^= data;
     for (i = 0; i < 8; i++) {
         if (crc & 0x80) {
-            crc = ((crc << 1) ^ 0x31) & 0xFF;
+            crc = (crc << 1) ^ 0x31;
         } else {
-            crc = (crc << 1) & 0xFF;
+            crc <<= 1;
         }
     }
     return crc;
