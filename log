@@ -1,227 +1,115 @@
-Размер WavHeader в памяти: 44 байт (Должно быть ровно 44)
 =========================================================
-   СТАРТ МОДУЛЬНОГО И ИНТЕГРАЦИОННОГО ТЕСТИРОВАНИЯ ЦОС   
+  ПОШАГОВАЯ BOTTOM-UP ВЕРИФИКАЦИЯ ЦОС И ФИЗИЧЕСКОГО СЛОЯ 
 =========================================================
 
-[TEST] Тестирование CRC-8...
-  -> УСПЕХ: Вычисление CRC корректно (0x62 == 0x62).
-  -> УСПЕХ (Негативный тест): Ложное совпадение исключено.
-[TEST] Тестирование byte_to_symbols...
-  -> УСПЕХ: Байт корректно разбит на 2-битные символы (3, 2, 1, 0).
-[TEST] Тестирование ограничений передатчика...
-  -> УСПЕХ: Передатчик корректно заблокировал NULL payload.
-  -> УСПЕХ: Передатчик корректно заблокировал длину > MAX_PAYLOAD.
-[TEST] Тестирование приемника на отсутствие файла...
-  -> УСПЕХ: Приемник корректно отработал отсутствие файла физической линии.
+[STEP 5.1] Измерение реального уровня энергий Гёрцеля после Лимитера в шумах...
+  -> Результаты Лимитера в грязном канале:
+     Пиковая резонансная энергия:  1012.21
+     Минимальная энергия в окне:    0.00
+     Средняя накопленная энергия:   172.93
+=== ЭТАП 5.1 ЗАВЕРШЕН (Данные для калибровки порогов собраны) ===
 
-=== ЗАПУСК СКВОЗНОЙ СИМУЛЯЦИИ ЛИНИИ СВЯЗИ ===
+[STEP 5.2] Проверка посимвольного распознавания грязного сигнала на ЖЕСТКОЙ сетке часов...
+  -> Генерируем грязный пакет 'в стык'...
 
---- Сценарий 1: Лабораторно чистый кабель ---
+======================================================================
+[ЦОС ТЕЛЕМЕТРИЯ] Анализ кадра: stage5_2_dirty_sync.wav (Байт в файле: 7)
+======================================================================
 
---- СТАРТ ЧЕСТНОГО СКОЛЬЗЯЩЕГО ЦОС-ОКНА: downlink_clean.wav ---
-SampleIdx:  4756 | WIN: 2 | MaxAmp: 5044.89 [CLOCK CAPTURED]
-SampleIdx:  4772 | WIN: 1 | MaxAmp: 5082.02 [CLOCK CAPTURED]
-SampleIdx:  4788 | WIN: 3 | MaxAmp: 6201.28 [CLOCK CAPTURED]
-SampleIdx:  4804 | WIN: 3 | MaxAmp: 7783.91 [CLOCK CAPTURED]
-SampleIdx:  4821 | WIN: 0 | MaxAmp: 5325.39 [CLOCK CAPTURED]
-SampleIdx:  4837 | WIN: 3 | MaxAmp: 9839.03 [CLOCK CAPTURED]
-SampleIdx:  4855 | WIN: 2 | MaxAmp: 5857.83 [CLOCK CAPTURED]
-SampleIdx:  4871 | WIN: 2 | MaxAmp: 21945.64 [CLOCK CAPTURED]
-SampleIdx:  4887 | WIN: 1 | MaxAmp: 14592.87 [CLOCK CAPTURED]
-SampleIdx:  4903 | WIN: 3 | MaxAmp: 14896.69 [CLOCK CAPTURED]
-SampleIdx:  4919 | WIN: 2 | MaxAmp: 24782.89 [CLOCK CAPTURED]
-SampleIdx:  4935 | WIN: 2 | MaxAmp: 5739.07 [CLOCK CAPTURED]
-SampleIdx:  4951 | WIN: 3 | MaxAmp: 24953.41 [CLOCK CAPTURED]
-SampleIdx:  4967 | WIN: 0 | MaxAmp: 9033.07 [CLOCK CAPTURED]
-SampleIdx:  4983 | WIN: 2 | MaxAmp: 27501.71 [CLOCK CAPTURED]
-SampleIdx:  4999 | WIN: 2 | MaxAmp: 29084.69 [CLOCK CAPTURED]
-SampleIdx:  5015 | WIN: 2 | MaxAmp: 26668.11 [CLOCK CAPTURED]
-SampleIdx:  5031 | WIN: 1 | MaxAmp: 13902.44 [CLOCK CAPTURED]
-SampleIdx:  5047 | WIN: 2 | MaxAmp: 27016.99 [CLOCK CAPTURED]
-SampleIdx:  5063 | WIN: 2 | MaxAmp: 17052.04 [CLOCK CAPTURED]
-SampleIdx:  5079 | WIN: 1 | MaxAmp: 6589.83 [CLOCK CAPTURED]
-SampleIdx:  5095 | WIN: 2 | MaxAmp: 23418.21 [CLOCK CAPTURED]
-SampleIdx:  5111 | WIN: 0 | MaxAmp: 17846.40 [CLOCK CAPTURED]
-SampleIdx:  5127 | WIN: 1 | MaxAmp: 9682.18 [CLOCK CAPTURED]
-SampleIdx:  5143 | WIN: 0 | MaxAmp: 32261.64 [CLOCK CAPTURED]
-SampleIdx:  5159 | WIN: 2 | MaxAmp: 9663.12 [CLOCK CAPTURED]
-SampleIdx:  5175 | WIN: 3 | MaxAmp: 23140.85 [CLOCK CAPTURED]
-SampleIdx:  5191 | WIN: 0 | MaxAmp: 8682.85 [CLOCK CAPTURED]
-SampleIdx:  5207 | WIN: 1 | MaxAmp: 12542.20 [CLOCK CAPTURED]
-SampleIdx:  5223 | WIN: 2 | MaxAmp: 25522.13 [CLOCK CAPTURED]
-SampleIdx:  5239 | WIN: 3 | MaxAmp: 30410.06 [CLOCK CAPTURED]
-SampleIdx:  5255 | WIN: 0 | MaxAmp: 26134.48 [CLOCK CAPTURED]
-SampleIdx:  5271 | WIN: 2 | MaxAmp: 25563.77 [CLOCK CAPTURED]
-SampleIdx:  5287 | WIN: 0 | MaxAmp: 27884.19 [CLOCK CAPTURED]
-SampleIdx:  5303 | WIN: 0 | MaxAmp: 27884.19 [CLOCK CAPTURED]
-SampleIdx:  5319 | WIN: 0 | MaxAmp: 27884.17 [CLOCK CAPTURED]
-SampleIdx:  5335 | WIN: 0 | MaxAmp: 27884.19 [CLOCK CAPTURED]
-SampleIdx:  5351 | WIN: 2 | MaxAmp: 11747.73 [CLOCK CAPTURED]
-SampleIdx:  5367 | WIN: 2 | MaxAmp: 32190.73 [CLOCK CAPTURED]
-SampleIdx:  5383 | WIN: 1 | MaxAmp: 7165.41 [CLOCK CAPTURED]
-SampleIdx:  5399 | WIN: 3 | MaxAmp: 21675.66 [CLOCK CAPTURED]
-SampleIdx:  5415 | WIN: 0 | MaxAmp: 15884.53 [CLOCK CAPTURED]
-SampleIdx:  5431 | WIN: 1 | MaxAmp: 12418.99 [CLOCK CAPTURED]
-SampleIdx:  5447 | WIN: 0 | MaxAmp: 23689.59 [CLOCK CAPTURED]
-SampleIdx:  5464 | WIN: 0 | MaxAmp: 31393.00 [CLOCK CAPTURED]
-SampleIdx:  5480 | WIN: 0 | MaxAmp: 30870.24 [CLOCK CAPTURED]
-SampleIdx:  5496 | WIN: 1 | MaxAmp: 6224.01 [CLOCK CAPTURED]
-SampleIdx:  5512 | WIN: 3 | MaxAmp: 26089.53 [CLOCK CAPTURED]
-SampleIdx:  5528 | WIN: 1 | MaxAmp: 15439.02 [CLOCK CAPTURED]
-SampleIdx:  5544 | WIN: 3 | MaxAmp: 24291.94 [CLOCK CAPTURED]
-SampleIdx:  5560 | WIN: 0 | MaxAmp: 13111.20 [CLOCK CAPTURED]
-SampleIdx:  5576 | WIN: 2 | MaxAmp: 32421.93 [CLOCK CAPTURED]
-SampleIdx:  5592 | WIN: 2 | MaxAmp: 16944.06 [CLOCK CAPTURED]
-SampleIdx:  5608 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5624 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5640 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5656 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5672 | WIN: 3 | MaxAmp: 6741.66 [CLOCK CAPTURED]
-SampleIdx:  5688 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5704 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5720 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  5736 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5752 | WIN: 3 | MaxAmp: 6741.66 [CLOCK CAPTURED]
-SampleIdx:  5768 | WIN: 3 | MaxAmp: 6741.66 [CLOCK CAPTURED]
-SampleIdx:  5784 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5800 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  5816 | WIN: 3 | MaxAmp: 6741.66 [CLOCK CAPTURED]
-SampleIdx:  5832 | WIN: 3 | MaxAmp: 6741.66 [CLOCK CAPTURED]
-SampleIdx:  5848 | WIN: 3 | MaxAmp: 6741.67 [CLOCK CAPTURED]
-SampleIdx:  5864 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5880 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  5896 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5912 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5928 | WIN: 3 | MaxAmp: 6741.66 [CLOCK CAPTURED]
-SampleIdx:  5944 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  5960 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5976 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  5992 | WIN: 3 | MaxAmp: 6741.66 [CLOCK CAPTURED]
-SampleIdx:  6008 | WIN: 3 | MaxAmp: 6741.66 [CLOCK CAPTURED]
-SampleIdx:  6024 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  6040 | WIN: 3 | MaxAmp: 6741.63 [CLOCK CAPTURED]
-SampleIdx:  6056 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  6072 | WIN: 3 | MaxAmp: 6741.66 [CLOCK CAPTURED]
-SampleIdx:  6088 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  6104 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  6120 | WIN: 3 | MaxAmp: 6741.63 [CLOCK CAPTURED]
-SampleIdx:  6136 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  6152 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  6168 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  6184 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  6200 | WIN: 3 | MaxAmp: 6741.63 [CLOCK CAPTURED]
-SampleIdx:  6216 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  6232 | WIN: 3 | MaxAmp: 6741.66 [CLOCK CAPTURED]
-SampleIdx:  6248 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  6264 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  6280 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  6296 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  6312 | WIN: 3 | MaxAmp: 6741.65 [CLOCK CAPTURED]
-SampleIdx:  6328 | WIN: 3 | MaxAmp: 6741.66 [CLOCK CAPTURED]
-SampleIdx:  6344 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-SampleIdx:  6360 | WIN: 3 | MaxAmp: 6741.63 [CLOCK CAPTURED]
-SampleIdx:  6376 | WIN: 3 | MaxAmp: 6741.64 [CLOCK CAPTURED]
-[REMOTE] ПРОВАЛ: Удаленный модуль не увидел чистый сигнал Downlink.
+--- Чтение байта №0 (SampleIdx старта: 0) ---
+  Символ 1/9 | E0(1000Hz):   8.7 | E1(1400Hz):  97.5 | E2(1800Hz):   2.9 | WIN: F1 | Шаг относительно F0 -> БИТ: 0
+  Символ 2/9 | E0(1000Hz):  99.7 | E1(1400Hz):   1.7 | E2(1800Hz):   0.1 | WIN: F0 | Шаг относительно F1 -> БИТ: 1
+  Символ 3/9 | E0(1000Hz):   2.8 | E1(1400Hz):   5.1 | E2(1800Hz): 100.5 | WIN: F2 | Шаг относительно F0 -> БИТ: 1
+  Символ 4/9 | E0(1000Hz):   0.3 | E1(1400Hz): 100.1 | E2(1800Hz):   9.1 | WIN: F1 | Шаг относительно F2 -> БИТ: 1
+  Символ 5/9 | E0(1000Hz):  97.9 | E1(1400Hz):   4.3 | E2(1800Hz):   0.5 | WIN: F0 | Шаг относительно F1 -> БИТ: 1
+  Символ 6/9 | E0(1000Hz):   0.9 | E1(1400Hz):   5.0 | E2(1800Hz): 101.7 | WIN: F2 | Шаг относительно F0 -> БИТ: 1
+  Символ 7/9 | E0(1000Hz):   3.6 | E1(1400Hz):  96.6 | E2(1800Hz):   5.3 | WIN: F1 | Шаг относительно F2 -> БИТ: 1
+  Символ 8/9 | E0(1000Hz):   2.4 | E1(1400Hz):   3.8 | E2(1800Hz): 103.9 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+  Символ 9/9 | E0(1000Hz):   7.6 | E1(1400Hz): 104.1 | E2(1800Hz):   2.8 | WIN: F1 | Шаг относительно F2 -> БИТ: 1
+ => ПОЛУЧЕН ПАКЕТ БАЙТА: [ 7E.1 ] | Локальный Odd Parity: 1 -> УСПЕХ (Чётность совпала)
+    [СЛУЖЕБНЫЙ] Байт распознан как маркер начала кадра SOF.
 
---- Сценарий 2: Реалистично грязный кабель (Шумы + Щелчки Найквиста) ---
+--- Чтение байта №1 (SampleIdx старта: 288) ---
+  Символ 1/9 | E0(1000Hz):   3.6 | E1(1400Hz):   3.0 | E2(1800Hz):  94.3 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+  Символ 2/9 | E0(1000Hz): 108.4 | E1(1400Hz):   4.5 | E2(1800Hz):   0.5 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 3/9 | E0(1000Hz):  10.0 | E1(1400Hz): 105.6 | E2(1800Hz):   1.6 | WIN: F1 | Шаг относительно F0 -> БИТ: 0
+  Символ 4/9 | E0(1000Hz):   3.9 | E1(1400Hz):   2.0 | E2(1800Hz): 103.6 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+  Символ 5/9 | E0(1000Hz):  92.7 | E1(1400Hz):   2.6 | E2(1800Hz):   0.2 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 6/9 | E0(1000Hz):   3.6 | E1(1400Hz):   3.0 | E2(1800Hz):  94.3 | WIN: F2 | Шаг относительно F0 -> БИТ: 1
+  Символ 7/9 | E0(1000Hz): 108.4 | E1(1400Hz):   4.5 | E2(1800Hz):   0.5 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 8/9 | E0(1000Hz):  10.0 | E1(1400Hz): 105.6 | E2(1800Hz):   1.6 | WIN: F1 | Шаг относительно F0 -> БИТ: 0
+  Символ 9/9 | E0(1000Hz):   3.9 | E1(1400Hz):   2.0 | E2(1800Hz): 103.6 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+ => ПОЛУЧЕН ПАКЕТ БАЙТА: [ 04.0 ] | Локальный Odd Parity: 0 -> УСПЕХ (Чётность совпала)
+    [СЛУЖЕБНЫЙ] Байт распознан как длина Payload: Ожидаем 4 байт данных.
 
---- СТАРТ ЧЕСТНОГО СКОЛЬЗЯЩЕГО ЦОС-ОКНА: downlink_dirty.wav ---
-SampleIdx:  4951 | WIN: 2 | MaxAmp: 6172.96 [CLOCK CAPTURED]
-SampleIdx:  4967 | WIN: 2 | MaxAmp: 24196.85 [CLOCK CAPTURED]
-SampleIdx:  4991 | WIN: 2 | MaxAmp: 8822.05 [CLOCK CAPTURED]
-SampleIdx:  5011 | WIN: 2 | MaxAmp: 6943.65 [CLOCK CAPTURED]
-SampleIdx:  5027 | WIN: 2 | MaxAmp: 6289.43 [CLOCK CAPTURED]
-SampleIdx:  5043 | WIN: 2 | MaxAmp: 8109.24 [CLOCK CAPTURED]
-SampleIdx:  5059 | WIN: 2 | MaxAmp: 14442.19 [CLOCK CAPTURED]
-SampleIdx:  5087 | WIN: 3 | MaxAmp: 5010.51 [CLOCK CAPTURED]
-SampleIdx:  5103 | WIN: 3 | MaxAmp: 10882.09 [CLOCK CAPTURED]
-SampleIdx:  5119 | WIN: 3 | MaxAmp: 13242.14 [CLOCK CAPTURED]
-SampleIdx:  5135 | WIN: 2 | MaxAmp: 31253.22 [CLOCK CAPTURED]
-SampleIdx:  5151 | WIN: 2 | MaxAmp: 32545.69 [CLOCK CAPTURED]
-SampleIdx:  5167 | WIN: 0 | MaxAmp: 26365.48 [CLOCK CAPTURED]
-SampleIdx:  5183 | WIN: 3 | MaxAmp: 10332.21 [CLOCK CAPTURED]
-SampleIdx:  5199 | WIN: 3 | MaxAmp: 9868.35 [CLOCK CAPTURED]
-SampleIdx:  5215 | WIN: 3 | MaxAmp: 7649.04 [CLOCK CAPTURED]
-SampleIdx:  5231 | WIN: 3 | MaxAmp: 9286.90 [CLOCK CAPTURED]
-SampleIdx:  5247 | WIN: 3 | MaxAmp: 7282.97 [CLOCK CAPTURED]
-SampleIdx:  5263 | WIN: 2 | MaxAmp: 30001.35 [CLOCK CAPTURED]
-SampleIdx:  5279 | WIN: 0 | MaxAmp: 31523.38 [CLOCK CAPTURED]
-SampleIdx:  5295 | WIN: 0 | MaxAmp: 18827.32 [CLOCK CAPTURED]
-SampleIdx:  5311 | WIN: 0 | MaxAmp: 10880.75 [CLOCK CAPTURED]
-SampleIdx:  5327 | WIN: 0 | MaxAmp: 10384.56 [CLOCK CAPTURED]
-SampleIdx:  5343 | WIN: 3 | MaxAmp: 10430.15 [CLOCK CAPTURED]
-SampleIdx:  5359 | WIN: 3 | MaxAmp: 19363.89 [CLOCK CAPTURED]
-SampleIdx:  5375 | WIN: 3 | MaxAmp: 25455.02 [CLOCK CAPTURED]
-SampleIdx:  5391 | WIN: 3 | MaxAmp: 32611.97 [CLOCK CAPTURED]
-SampleIdx:  5407 | WIN: 3 | MaxAmp: 28319.81 [CLOCK CAPTURED]
-SampleIdx:  5423 | WIN: 0 | MaxAmp: 16103.32 [CLOCK CAPTURED]
-SampleIdx:  5439 | WIN: 3 | MaxAmp: 29842.93 [CLOCK CAPTURED]
-SampleIdx:  5455 | WIN: 3 | MaxAmp: 31774.11 [CLOCK CAPTURED]
-SampleIdx:  5471 | WIN: 3 | MaxAmp: 31736.70 [CLOCK CAPTURED]
-SampleIdx:  5487 | WIN: 3 | MaxAmp: 31531.15 [CLOCK CAPTURED]
-SampleIdx:  5503 | WIN: 3 | MaxAmp: 31507.85 [CLOCK CAPTURED]
-SampleIdx:  5519 | WIN: 0 | MaxAmp: 18092.76 [CLOCK CAPTURED]
-SampleIdx:  5535 | WIN: 0 | MaxAmp: 18509.76 [CLOCK CAPTURED]
-SampleIdx:  5551 | WIN: 0 | MaxAmp: 17557.29 [CLOCK CAPTURED]
-SampleIdx:  5567 | WIN: 3 | MaxAmp: 31717.34 [CLOCK CAPTURED]
-SampleIdx:  5583 | WIN: 3 | MaxAmp: 29760.77 [CLOCK CAPTURED]
-SampleIdx:  5599 | WIN: 3 | MaxAmp: 29266.87 [CLOCK CAPTURED]
-SampleIdx:  5615 | WIN: 2 | MaxAmp: 23524.32 [CLOCK CAPTURED]
-SampleIdx:  5631 | WIN: 3 | MaxAmp: 30394.36 [CLOCK CAPTURED]
-SampleIdx:  5647 | WIN: 3 | MaxAmp: 22470.56 [CLOCK CAPTURED]
-SampleIdx:  5663 | WIN: 3 | MaxAmp: 21549.59 [CLOCK CAPTURED]
-SampleIdx:  5679 | WIN: 3 | MaxAmp: 24722.83 [CLOCK CAPTURED]
-SampleIdx:  5695 | WIN: 3 | MaxAmp: 24097.92 [CLOCK CAPTURED]
-SampleIdx:  5711 | WIN: 3 | MaxAmp: 24111.39 [CLOCK CAPTURED]
-SampleIdx:  5751 | WIN: 2 | MaxAmp: 32621.64 [CLOCK CAPTURED]
-SampleIdx:  5767 | WIN: 0 | MaxAmp: 28727.00 [CLOCK CAPTURED]
-SampleIdx:  5783 | WIN: 0 | MaxAmp: 29409.81 [CLOCK CAPTURED]
-SampleIdx:  5799 | WIN: 0 | MaxAmp: 29102.33 [CLOCK CAPTURED]
-SampleIdx:  5815 | WIN: 0 | MaxAmp: 29007.05 [CLOCK CAPTURED]
-SampleIdx:  5831 | WIN: 0 | MaxAmp: 28750.11 [CLOCK CAPTURED]
-SampleIdx:  5847 | WIN: 0 | MaxAmp: 28458.01 [CLOCK CAPTURED]
-SampleIdx:  5863 | WIN: 0 | MaxAmp: 28214.31 [CLOCK CAPTURED]
-SampleIdx:  5879 | WIN: 0 | MaxAmp: 28069.04 [CLOCK CAPTURED]
-SampleIdx:  5895 | WIN: 0 | MaxAmp: 28005.69 [CLOCK CAPTURED]
-SampleIdx:  5911 | WIN: 0 | MaxAmp: 28256.78 [CLOCK CAPTURED]
-SampleIdx:  5927 | WIN: 0 | MaxAmp: 28228.52 [CLOCK CAPTURED]
-SampleIdx:  5943 | WIN: 0 | MaxAmp: 28476.55 [CLOCK CAPTURED]
-SampleIdx:  5959 | WIN: 0 | MaxAmp: 28375.95 [CLOCK CAPTURED]
-SampleIdx:  5975 | WIN: 0 | MaxAmp: 28299.37 [CLOCK CAPTURED]
-SampleIdx:  5991 | WIN: 0 | MaxAmp: 28393.88 [CLOCK CAPTURED]
-SampleIdx:  6007 | WIN: 0 | MaxAmp: 28225.58 [CLOCK CAPTURED]
-SampleIdx:  6023 | WIN: 0 | MaxAmp: 28238.49 [CLOCK CAPTURED]
-SampleIdx:  6039 | WIN: 0 | MaxAmp: 28156.43 [CLOCK CAPTURED]
-SampleIdx:  6055 | WIN: 0 | MaxAmp: 28124.27 [CLOCK CAPTURED]
-SampleIdx:  6071 | WIN: 0 | MaxAmp: 27876.05 [CLOCK CAPTURED]
-SampleIdx:  6087 | WIN: 0 | MaxAmp: 28058.88 [CLOCK CAPTURED]
-SampleIdx:  6103 | WIN: 0 | MaxAmp: 28169.60 [CLOCK CAPTURED]
-SampleIdx:  6119 | WIN: 0 | MaxAmp: 28319.40 [CLOCK CAPTURED]
-SampleIdx:  6135 | WIN: 0 | MaxAmp: 28223.24 [CLOCK CAPTURED]
-SampleIdx:  6151 | WIN: 0 | MaxAmp: 28185.48 [CLOCK CAPTURED]
-SampleIdx:  6167 | WIN: 0 | MaxAmp: 28167.57 [CLOCK CAPTURED]
-SampleIdx:  6183 | WIN: 0 | MaxAmp: 28047.60 [CLOCK CAPTURED]
-SampleIdx:  6199 | WIN: 0 | MaxAmp: 28115.09 [CLOCK CAPTURED]
-SampleIdx:  6215 | WIN: 0 | MaxAmp: 28419.00 [CLOCK CAPTURED]
-SampleIdx:  6231 | WIN: 0 | MaxAmp: 28169.80 [CLOCK CAPTURED]
-SampleIdx:  6247 | WIN: 0 | MaxAmp: 27765.47 [CLOCK CAPTURED]
-SampleIdx:  6263 | WIN: 0 | MaxAmp: 27797.24 [CLOCK CAPTURED]
-SampleIdx:  6279 | WIN: 0 | MaxAmp: 27329.66 [CLOCK CAPTURED]
-SampleIdx:  6295 | WIN: 0 | MaxAmp: 27175.45 [CLOCK CAPTURED]
-SampleIdx:  6311 | WIN: 0 | MaxAmp: 26901.58 [CLOCK CAPTURED]
-SampleIdx:  6327 | WIN: 0 | MaxAmp: 26824.94 [CLOCK CAPTURED]
-SampleIdx:  6343 | WIN: 0 | MaxAmp: 26730.58 [CLOCK CAPTURED]
-SampleIdx:  6359 | WIN: 0 | MaxAmp: 26845.41 [CLOCK CAPTURED]
-SampleIdx:  6375 | WIN: 0 | MaxAmp: 26706.88 [CLOCK CAPTURED]
-SampleIdx:  6391 | WIN: 0 | MaxAmp: 26701.21 [CLOCK CAPTURED]
-SampleIdx:  6407 | WIN: 0 | MaxAmp: 27066.73 [CLOCK CAPTURED]
-SampleIdx:  6423 | WIN: 0 | MaxAmp: 26956.37 [CLOCK CAPTURED]
-SampleIdx:  6439 | WIN: 0 | MaxAmp: 27176.96 [CLOCK CAPTURED]
-SampleIdx:  6455 | WIN: 0 | MaxAmp: 27413.52 [CLOCK CAPTURED]
-SampleIdx:  6471 | WIN: 0 | MaxAmp: 27517.95 [CLOCK CAPTURED]
-SampleIdx:  6487 | WIN: 0 | MaxAmp: 27027.48 [CLOCK CAPTURED]
-SampleIdx:  6503 | WIN: 0 | MaxAmp: 23631.26 [CLOCK CAPTURED]
-SampleIdx:  6519 | WIN: 3 | MaxAmp: 31692.88 [CLOCK CAPTURED]
-SampleIdx:  6535 | WIN: 3 | MaxAmp: 31624.18 [CLOCK CAPTURED]
-SampleIdx:  6551 | WIN: 3 | MaxAmp: 31434.19 [CLOCK CAPTURED]
-[REMOTE] ПРОВАЛ: Сигнал полностью утонул в коричневом шуме.
+--- Чтение байта №2 (SampleIdx старта: 576) ---
+  Символ 1/9 | E0(1000Hz):  92.7 | E1(1400Hz):   2.6 | E2(1800Hz):   0.2 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 2/9 | E0(1000Hz):   8.4 | E1(1400Hz):  97.5 | E2(1800Hz):   3.2 | WIN: F1 | Шаг относительно F0 -> БИТ: 0
+  Символ 3/9 | E0(1000Hz):   2.8 | E1(1400Hz):   5.1 | E2(1800Hz): 100.5 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+  Символ 4/9 | E0(1000Hz):   0.3 | E1(1400Hz): 100.1 | E2(1800Hz):   9.1 | WIN: F1 | Шаг относительно F2 -> БИТ: 1
+  Символ 5/9 | E0(1000Hz):   0.9 | E1(1400Hz):   5.0 | E2(1800Hz): 101.7 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+  Символ 6/9 | E0(1000Hz):  99.7 | E1(1400Hz):   1.7 | E2(1800Hz):   0.1 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 7/9 | E0(1000Hz):   3.6 | E1(1400Hz):  96.6 | E2(1800Hz):   5.3 | WIN: F1 | Шаг относительно F0 -> БИТ: 0
+  Символ 8/9 | E0(1000Hz): 108.4 | E1(1400Hz):   4.5 | E2(1800Hz):   0.5 | WIN: F0 | Шаг относительно F1 -> БИТ: 1
+  Символ 9/9 | E0(1000Hz):   2.4 | E1(1400Hz):   3.8 | E2(1800Hz): 103.9 | WIN: F2 | Шаг относительно F0 -> БИТ: 1
+ => ПОЛУЧЕН ПАКЕТ БАЙТА: [ 11.1 ] | Локальный Odd Parity: 1 -> УСПЕХ (Чётность совпала)
+    [ДАННЫЕ] Сохранено в буфер полезной нагрузки. Текущий CRC-8: 72
+
+--- Чтение байта №3 (SampleIdx старта: 864) ---
+  Символ 1/9 | E0(1000Hz):  97.9 | E1(1400Hz):   4.3 | E2(1800Hz):   0.5 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 2/9 | E0(1000Hz):   7.6 | E1(1400Hz): 104.1 | E2(1800Hz):   2.8 | WIN: F1 | Шаг относительно F0 -> БИТ: 0
+  Символ 3/9 | E0(1000Hz):  92.7 | E1(1400Hz):   2.6 | E2(1800Hz):   0.2 | WIN: F0 | Шаг относительно F1 -> БИТ: 1
+  Символ 4/9 | E0(1000Hz):   8.4 | E1(1400Hz):  97.5 | E2(1800Hz):   3.2 | WIN: F1 | Шаг относительно F0 -> БИТ: 0
+  Символ 5/9 | E0(1000Hz):   2.8 | E1(1400Hz):   5.1 | E2(1800Hz): 100.5 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+  Символ 6/9 | E0(1000Hz): 108.4 | E1(1400Hz):   6.0 | E2(1800Hz):   0.9 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 7/9 | E0(1000Hz):   3.9 | E1(1400Hz):   2.0 | E2(1800Hz): 103.6 | WIN: F2 | Шаг относительно F0 -> БИТ: 1
+  Символ 8/9 | E0(1000Hz):  92.7 | E1(1400Hz):   2.6 | E2(1800Hz):   0.2 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 9/9 | E0(1000Hz):   3.6 | E1(1400Hz):   3.0 | E2(1800Hz):  94.3 | WIN: F2 | Шаг относительно F0 -> БИТ: 1
+ => ПОЛУЧЕН ПАКЕТ БАЙТА: [ 22.1 ] | Локальный Odd Parity: 1 -> УСПЕХ (Чётность совпала)
+    [ДАННЫЕ] Сохранено в буфер полезной нагрузки. Текущий CRC-8: 7E
+
+--- Чтение байта №4 (SampleIdx старта: 1152) ---
+  Символ 1/9 | E0(1000Hz): 108.4 | E1(1400Hz):   4.5 | E2(1800Hz):   0.5 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 2/9 | E0(1000Hz):  10.0 | E1(1400Hz): 105.6 | E2(1800Hz):   1.6 | WIN: F1 | Шаг относительно F0 -> БИТ: 0
+  Символ 3/9 | E0(1000Hz): 108.4 | E1(1400Hz):   6.0 | E2(1800Hz):   0.9 | WIN: F0 | Шаг относительно F1 -> БИТ: 1
+  Символ 4/9 | E0(1000Hz):   3.9 | E1(1400Hz):   2.0 | E2(1800Hz): 103.6 | WIN: F2 | Шаг относительно F0 -> БИТ: 1
+  Символ 5/9 | E0(1000Hz):  92.7 | E1(1400Hz):   2.6 | E2(1800Hz):   0.2 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 6/9 | E0(1000Hz):   8.4 | E1(1400Hz):  97.5 | E2(1800Hz):   3.2 | WIN: F1 | Шаг относительно F0 -> БИТ: 0
+  Символ 7/9 | E0(1000Hz):  99.7 | E1(1400Hz):   1.7 | E2(1800Hz):   0.1 | WIN: F0 | Шаг относительно F1 -> БИТ: 1
+  Символ 8/9 | E0(1000Hz):   2.8 | E1(1400Hz):   5.1 | E2(1800Hz): 100.5 | WIN: F2 | Шаг относительно F0 -> БИТ: 1
+  Символ 9/9 | E0(1000Hz):   0.2 | E1(1400Hz):  99.8 | E2(1800Hz):   8.7 | WIN: F1 | Шаг относительно F2 -> БИТ: 1
+ => ПОЛУЧЕН ПАКЕТ БАЙТА: [ 33.1 ] | Локальный Odd Parity: 1 -> УСПЕХ (Чётность совпала)
+    [ДАННЫЕ] Сохранено в буфер полезной нагрузки. Текущий CRC-8: 71
+
+--- Чтение байта №5 (SampleIdx старта: 1440) ---
+  Символ 1/9 | E0(1000Hz):   0.8 | E1(1400Hz):   4.8 | E2(1800Hz): 101.5 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+  Символ 2/9 | E0(1000Hz):   3.8 | E1(1400Hz):  96.4 | E2(1800Hz):   4.9 | WIN: F1 | Шаг относительно F2 -> БИТ: 1
+  Символ 3/9 | E0(1000Hz):   2.2 | E1(1400Hz):   3.8 | E2(1800Hz): 103.8 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+  Символ 4/9 | E0(1000Hz):  96.3 | E1(1400Hz):   4.3 | E2(1800Hz):   0.5 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 5/9 | E0(1000Hz):   7.6 | E1(1400Hz): 104.0 | E2(1800Hz):   2.7 | WIN: F1 | Шаг относительно F0 -> БИТ: 0
+  Символ 6/9 | E0(1000Hz):  92.7 | E1(1400Hz):   2.6 | E2(1800Hz):   0.2 | WIN: F0 | Шаг относительно F1 -> БИТ: 1
+  Символ 7/9 | E0(1000Hz):   7.9 | E1(1400Hz):  97.2 | E2(1800Hz):   3.3 | WIN: F1 | Шаг относительно F0 -> БИТ: 0
+  Символ 8/9 | E0(1000Hz):   2.8 | E1(1400Hz):   5.2 | E2(1800Hz): 100.3 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+  Символ 9/9 | E0(1000Hz):   0.2 | E1(1400Hz):  99.8 | E2(1800Hz):   8.7 | WIN: F1 | Шаг относительно F2 -> БИТ: 1
+ => ПОЛУЧЕН ПАКЕТ БАЙТА: [ 44.1 ] | Локальный Odd Parity: 1 -> УСПЕХ (Чётность совпала)
+    [ДАННЫЕ] Сохранено в буфер полезной нагрузки. Текущий CRC-8: 30
+
+--- Чтение байта №6 (SampleIdx старта: 1728) ---
+  Символ 1/9 | E0(1000Hz):   0.8 | E1(1400Hz):   4.8 | E2(1800Hz): 101.5 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+  Символ 2/9 | E0(1000Hz):  99.7 | E1(1400Hz):   1.7 | E2(1800Hz):   0.1 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 3/9 | E0(1000Hz):   2.8 | E1(1400Hz):   5.2 | E2(1800Hz): 100.3 | WIN: F2 | Шаг относительно F0 -> БИТ: 1
+  Символ 4/9 | E0(1000Hz):   0.2 | E1(1400Hz):  99.8 | E2(1800Hz):   8.7 | WIN: F1 | Шаг относительно F2 -> БИТ: 1
+  Символ 5/9 | E0(1000Hz):   0.8 | E1(1400Hz):   4.8 | E2(1800Hz): 101.5 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+  Символ 6/9 | E0(1000Hz):  99.7 | E1(1400Hz):   1.7 | E2(1800Hz):   0.1 | WIN: F0 | Шаг относительно F2 -> БИТ: 0
+  Символ 7/9 | E0(1000Hz):   3.8 | E1(1400Hz):  96.4 | E2(1800Hz):   4.9 | WIN: F1 | Шаг относительно F0 -> БИТ: 0
+  Символ 8/9 | E0(1000Hz):   2.2 | E1(1400Hz):   3.8 | E2(1800Hz): 103.8 | WIN: F2 | Шаг относительно F1 -> БИТ: 0
+  Символ 9/9 | E0(1000Hz):   7.6 | E1(1400Hz): 104.0 | E2(1800Hz):   2.7 | WIN: F1 | Шаг относительно F2 -> БИТ: 1
+ => ПОЛУЧЕН ПАКЕТ БАЙТА: [ 30.1 ] | Локальный Odd Parity: 1 -> УСПЕХ (Чётность совпала)
+
+--- ПРОВЕРКА КОНТРОЛЬНОЙ СУММЫ КАДРА ---
+    Рассчитано приемником: 0x30
+    Принято из линии (CRC):  0x30
+=== КАДР ВЕРИФИЦИРОВАН УСПЕШНО ===
+  -> УСПЕХ: Фильтры Гёрцеля сквозь Ограничитель идеально различают вращение частот в шумах!
+=== ЭТАП 5.2 УСПЕШНО ПРОЙДЕН ===
+

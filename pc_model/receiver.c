@@ -86,22 +86,23 @@ fixed_t goertzel_block_process(Goertzel_Fx *g, fixed_t sample) {
 }
 
 fixed_t apply_hard_limiter(int adc_sample) {
-    /* Если в линии тишина или микрошум — возвращаем ноль */
-    if (adc_sample > -2 && adc_sample < 2) {
-        return 0;
-    }
+    /*
+     * High-gain linear amplifier instead of pure square-wave clipping.
+     * We scale the small signal up by a factor of 4 to combat the -10 dB drop,
+     * but clip the absolute ceiling to prevent internal fixed-point overflow.
+     */
+    int scaled = adc_sample * 4;
 
-    if (adc_sample > 0) {
-        return INT_TO_FX(4);
-    } else {
-        return -INT_TO_FX(4);
-    }
+    if (scaled > 127)  scaled = 127;
+    if (scaled < -128) scaled = -128;
+
+    return INT_TO_FX(scaled) / 16; /* Clean, safe Q16.16 range */
 }
 
 int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out_payload) {
     FILE *f_in;
     WavHeader header;
-    int num_samples, payload_len, idx, i, b, t;
+    int num_samples, total_bytes_in_file, idx, i, b, t;
     short *samples;
     Goertzel_Fx detectors[3];
 
@@ -120,35 +121,44 @@ int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out
         goertzel_fx_init(&detectors[i], freqs[i], SYMBOL_LEN);
     }
 
-    payload_len = num_samples / (SYMBOL_LEN * BITS_PER_BYTE);
+    total_bytes_in_file = num_samples / (SYMBOL_LEN * BITS_PER_BYTE);
 
     unsigned char prev_decoded = 0;
-    int byte_idx = 0;
     int total_symbol_counter = 0;
+    int byte_idx = 0;
 
-    for (byte_idx = 0; byte_idx < payload_len; byte_idx++) {
+    int payload_len = 0;
+    int payload_counter = 0;
+    unsigned char calc_crc = 0;
+    unsigned char rx_crc = 0;
+
+    printf("\n======================================================================\n");
+    printf("[ЦОС ТЕЛЕМЕТРИЯ] Анализ кадра: %s (Байт в файле: %d)\n", filename, total_bytes_in_file);
+    printf("======================================================================\n");
+
+    for (byte_idx = 0; byte_idx < total_bytes_in_file; byte_idx++) {
         unsigned char assembled_byte = 0;
         unsigned char rx_parity_bit = 0;
         int bit_pos;
+
+        printf("\n--- Чтение байта №%d (SampleIdx старта: %d) ---\n", byte_idx, total_symbol_counter * SYMBOL_LEN);
 
         for (bit_pos = 0; bit_pos < 9; bit_pos++) {
             idx = total_symbol_counter * SYMBOL_LEN;
             total_symbol_counter++;
 
-            fixed_t amplitudes[3] = {-INT_TO_FX(1), -INT_TO_FX(1), -INT_TO_FX(1)};
+            fixed_t amplitudes[3] = {0, 0, 0};
             fixed_t max_amp = -1;
             int winner_sym = 0;
 
-            /* ОЧИЩАЕМ РЕЗОНАТОРЫ ПЕРЕД КАЖДЫМ СИМВОЛОМ */
+            /* Принудительный сброс БИХ-резонаторов перед новым символом */
             for (i = 0; i < 3; i++) {
                 goertzel_fx_reset(&detectors[i]);
             }
 
-            /* Прокачиваем 32 отсчета строго с нуля, без влияния буфера истории */
+            /* Интегрируем 32 отсчета */
             for (t = 0; t < SYMBOL_LEN; t++) {
                 int adc_sample = (int)samples[idx + t] / 256;
-
-                /* АРУ-Лимитер включен для защиты от шума грязного канала */
                 fixed_t fx_sample = apply_hard_limiter(adc_sample);
 
                 for (i = 0; i < 3; i++) {
@@ -159,6 +169,7 @@ int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out
                 }
             }
 
+            /* Находим доминирующий спектральный пик */
             for (i = 0; i < 3; i++) {
                 if (amplitudes[i] > max_amp) {
                     max_amp = amplitudes[i];
@@ -166,8 +177,18 @@ int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out
                 }
             }
 
+            /* Вычисляем относительный шаг вращения (дифференциальный декодер) */
             unsigned char decoded_bit = descramble_bit(winner_sym, prev_decoded);
-            prev_decoded = winner_sym;
+
+            /* Вывод побитовой диагностики ЦОС-движка */
+            printf("  Символ %d/9 | E0(1000Hz):%6.1f | E1(1400Hz):%6.1f | E2(1800Hz):%6.1f | WIN: F%d | Шаг относительно F%d -> БИТ: %d\n",
+                   bit_pos + 1,
+                   FX_TO_DOUBLE(amplitudes[0]),
+                   FX_TO_DOUBLE(amplitudes[1]),
+                   FX_TO_DOUBLE(amplitudes[2]),
+                   winner_sym, prev_decoded, decoded_bit);
+
+            prev_decoded = winner_sym; /* Сохраняем непрерывность фазового кольца */
 
             if (bit_pos < 8) {
                 assembled_byte |= (decoded_bit << (7 - bit_pos));
@@ -176,20 +197,56 @@ int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out
             }
         }
 
+        /* Вычисляем локальный паритет от собранного байта */
         unsigned char local_parity_bit = calculate_odd_parity(assembled_byte);
+        int parity_ok = (rx_parity_bit == local_parity_bit);
 
-        if (rx_parity_bit != local_parity_bit) {
-            printf("    [DEBUG FAIL] БайтIdx: %d | Собран: 0x%02X | Принятый Parity: %d | Ожидаемый Parity: %d\n",
-                   byte_idx, assembled_byte, rx_parity_bit, local_parity_bit);
+        /* СТРОГО ТРЕБУЕМЫЙ ФОРМАТ ВЫВОДА: [ XX.P ] */
+        printf(" => ПОЛУЧЕН ПАКЕТ БАЙТА: [ %02X.%d ] | Локальный Odd Parity: %d -> %s\n",
+               assembled_byte, rx_parity_bit, local_parity_bit,
+               parity_ok ? "УСПЕХ (Чётность совпала)" : "КРИТИЧЕСКАЯ ОШИБКА ЧЁТНОСТИ!");
+
+        if (!parity_ok) {
+            printf("[FAIL] Прерывание кадра из-за сбоя чётности.\n");
             free(samples);
-            return -2;
+            return -2; /* Ошибка паритета */
         }
 
-        out_payload[byte_idx] = assembled_byte;
+        /* Распределение байт по логическим ролям внутри кадра */
+        if (byte_idx == 0) {
+            printf("    [СЛУЖЕБНЫЙ] Байт распознан как маркер начала кадра SOF.\n");
+            if (assembled_byte != SOF_BYTE) { free(samples); return -1; }
+        }
+        else if (byte_idx == 1) {
+            payload_len = assembled_byte;
+            printf("    [СЛУЖЕБНЫЙ] Байт распознан как длина Payload: Ожидаем %d байт данных.\n", payload_len);
+            if (payload_len > MAX_PAYLOAD || payload_len <= 0) { free(samples); return -1; }
+        }
+        else if (byte_idx < 2 + payload_len) {
+            out_payload[payload_counter++] = assembled_byte;
+            calc_crc = update_crc8(calc_crc, assembled_byte);
+            printf("    [ДАННЫЕ] Сохранено в буфер полезной нагрузки. Текущий CRC-8: %02X\n", calc_crc);
+        }
+        else {
+            rx_crc = assembled_byte;
+            free(samples);
+
+            printf("\n--- ПРОВЕРКА КОНТРОЛЬНОЙ СУММЫ КАДРА ---\n");
+            printf("    Рассчитано приемником: 0x%02X\n", calc_crc);
+            printf("    Принято из линии (CRC):  0x%02X\n", rx_crc);
+
+            if (calc_crc == rx_crc) {
+                printf("=== КАДР ВЕРИФИЦИРОВАН УСПЕШНО ===\n");
+                return payload_counter;
+            } else {
+                printf("=== [FAIL] СБОЙ КОНТРОЛЬНОЙ СУММЫ ПАКЕТА (CRC МИСМАТЧ) ===\n");
+                return -3;
+            }
+        }
     }
 
     free(samples);
-    return payload_len;
+    return -1;
 }
 
 int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned char *out_payload) {
