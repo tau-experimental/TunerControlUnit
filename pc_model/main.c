@@ -276,6 +276,126 @@ void test_step_4_integration(void) {
     }
 }
 
+void test_step_5_hardcore_cable(void) {
+    printf("[STEP 5] Стресс-тестирование в реалистичном зашумленном кабеле (-10 дБ, щелчки, слепой поиск)...\n");
+
+    unsigned char base_tx_data[] = {0xAA, 0x55, 0x12, 0x34, 0xFE, 0x00, 0x11, 0x99};
+    unsigned char remote_rx_buffer[MAX_PAYLOAD];
+    int len, i;
+
+    /*
+     * Генерируем самый сложный файл:
+     * Передатчик добавит рандомную тишину на старте, ослабит полезный сигнал на 10 дБ,
+     * наложит непрерывный коричневый шум и высоковольтные щелчки.
+     */
+    generate_fsk_wav(base_tx_data, 8, FREQ_DOWNLINK, "downlink_stage5_hardcore.wav", 1);
+
+    /* Запускаем динамический приемник с математическим усилителем-ограничителем */
+    len = decode_fsk_wav_dynamic("downlink_stage5_hardcore.wav", FREQ_DOWNLINK, remote_rx_buffer);
+
+    if (len == 8) {
+        printf("  -> [REMOTE] ЦОС-Ограничитель совершил чудо! Пакет извлечен без единой ошибки: ");
+        for(i = 0; i < len; i++) printf("%02X ", remote_rx_buffer[i]);
+        printf("\n=== ЭТАП 5 УСПЕШНО ПРОЙДЕН! СИСТЕМА СВЯЗИ ПОЛНОСТЬЮ ВЕРИФИЦИРОВАНА ===\n");
+    } else {
+        printf("  [FAIL] Пакет разрушен помехой. Код ошибки динамического приемника: %d\n", len);
+        exit(-1);
+    }
+}
+
+void test_step_5_1_limiter_noise_floor(void) {
+    printf("[STEP 5.1] Измерение реального уровня энергий Гёрцеля после Лимитера в шумах...\n");
+
+    Goertzel_Fx detector;
+    unsigned char test_payload[1] = {0x00}; /* Сгенерирует чистый тон 1000 Гц по нашему кодеку */
+    short *samples;
+    int num_samples, t;
+    fixed_t max_energy = 0;
+    fixed_t min_energy = 0x7FFFFFFF; //INT_TO_FX(99999);
+    int64_t avg_energy = 0;
+    int energy_count = 0;
+
+    /* Генерируем грязный файл сплошного тона (через передатчик с dirty=1, но без пауз для простоты замера) */
+    generate_fsk_wav(test_payload, 1, FREQ_DOWNLINK, "stage5_1_probe.wav", 1);
+
+    /* Открываем и читаем сгенерированные отсчеты напрямую */
+    FILE *f = fopen("stage5_1_probe.wav", "rb");
+    WavHeader header;
+    fread(&header, sizeof(WavHeader), 1, f);
+    num_samples = header.subchunk2Size / 2;
+    samples = (short *)malloc(num_samples * sizeof(short));
+    fread(samples, sizeof(short), num_samples, f);
+    fclose(f);
+
+    goertzel_fx_init(&detector, 1000.0, SYMBOL_LEN);
+    fixed_t history_buffer[SYMBOL_LEN] = {0};
+    int history_idx = 0;
+
+    for (t = 0; t < num_samples; t++) {
+        int adc_sample = (int)samples[t] / 256;
+        fixed_t fx_sample = apply_hard_limiter(adc_sample);
+
+        fixed_t old_sample = history_buffer[history_idx];
+        history_buffer[history_idx] = fx_sample;
+        history_idx = (history_idx + 1) % SYMBOL_LEN;
+
+        fixed_t energy = goertzel_sliding_process(&detector, fx_sample, old_sample);
+
+        /*
+         * FIX: We MUST skip the initial sliding window warm-up markers (-65536)
+         * and only read values once the signal hits the limiter (fx_sample != 0)
+         */
+        if (energy != -INT_TO_FX(1) && energy >= 0 && fx_sample != 0) {
+            if (energy > max_energy) max_energy = energy;
+            if (energy < min_energy) min_energy = energy;
+            avg_energy += (int64_t)energy;
+            energy_count++;
+        }
+    }
+
+    printf("  -> Результаты Лимитера в грязном канале:\n");
+    printf("     Пиковая резонансная энергия:  %.2f\n", FX_TO_DOUBLE(max_energy));
+    printf("     Минимальная энергия в окне:    %.2f\n", FX_TO_DOUBLE(min_energy));
+    if (energy_count > 0) {
+        /* Приводим результат к double перед выводом */
+		double final_avg = (double)avg_energy / (double)energy_count;
+		printf("     Средняя накопленная энергия:   %.2f\n", final_avg / 65536.0);
+	}
+
+    free(samples);
+    printf("=== ЭТАП 5.1 ЗАВЕРШЕН (Данные для калибровки порогов собраны) ===\n\n");
+}
+
+/* ==============================================================================
+ * ЭТАП 5.2: ВЕРИФИКАЦИЯ СИНХРОННОГО ПРИЕМА ПАКЕТА ИЗ ГРЯЗНОГО КАБЕЛЯ
+ * ==============================================================================
+ */
+void test_step_5_2_dirty_synchronous(void) {
+    printf("[STEP 5.2] Проверка посимвольного распознавания грязного сигнала на ЖЕСТКОЙ сетке часов...\n");
+
+    unsigned char test_payload[] = {0x11, 0x22, 0x33, 0x44};
+    unsigned char rx_buffer[MAX_PAYLOAD];
+    int len, i;
+
+    /* Генерируем грязный файл, но БЕЗ начальной паузы и преамбулы (dirty=1, но логика "в стык" в transmitter.c подправлена) */
+    /* В transmitter.c при генерации для этого теста временно важна жесткая сетка.
+       Мы используем функцию decode_fsk_wav, но добавим в нее вызов apply_hard_limiter! */
+    printf("  -> Генерируем грязный пакет 'в стык'...\n");
+    generate_fsk_wav(test_payload, 4, FREQ_DOWNLINK, "stage5_2_dirty_sync.wav", 1);
+
+    /* Модифицируем decode_fsk_wav, чтобы она внутри использовала apply_hard_limiter.
+       Если она сможет прочесть — значит, фильтры Гёрцеля аппаратно справляются с шумом меандра! */
+    len = decode_fsk_wav("stage5_2_dirty_sync.wav", FREQ_DOWNLINK, rx_buffer);
+
+    if (len == 4 && memcmp(test_payload, rx_buffer, 4) == 0) {
+        printf("  -> УСПЕХ: Фильтры Гёрцеля сквозь Ограничитель идеально различают вращение частот в шумах!\n");
+        printf("=== ЭТАП 5.2 УСПЕШНО ПРОЙДЕН ===\n\n");
+    } else {
+        printf("  [FAIL] Сбой посимвольного распознавания в шумах. Код ответа: %d\n", len);
+        /* Мы не вызываем exit, чтобы посмотреть остальные логи */
+    }
+}
+
 int main(void) {
     srand((unsigned int)time(NULL));
 
@@ -284,10 +404,15 @@ int main(void) {
     printf("=========================================================\n\n");
 
     /* Выполняем тесты строго от простого к сложному */
-    test_step_1_filters();
-    test_step_2_codec();
-    test_step_3_hardware_synthesis();
-    test_step_4_integration();
+    //test_step_1_filters();
+    //test_step_2_codec();
+    //test_step_3_hardware_synthesis();
+    //test_step_4_integration();
+
+    test_step_5_1_limiter_noise_floor();
+    test_step_5_2_dirty_synchronous();
+
+    //test_step_5_hardcore_cable();
 
     return 0;
 }

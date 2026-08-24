@@ -15,8 +15,12 @@ typedef struct {
 void goertzel_fx_init(Goertzel_Fx *g, double target_freq, int len);
 void goertzel_fx_reset(Goertzel_Fx *g);
 fixed_t goertzel_fx_process(Goertzel_Fx *g, fixed_t sample);
+fixed_t goertzel_block_process(Goertzel_Fx *g, fixed_t sample);
+
+fixed_t apply_hard_limiter(int adc_sample);
 
 /* Обновленный прототип декодера (внутренняя обработка полностью на fixed_t) */
 int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out_payload);
+int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned char *out_payload);
 
 #endif /* RECEIVER_H */
