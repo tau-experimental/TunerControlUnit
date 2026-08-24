@@ -381,7 +381,7 @@ void test_step_5_2_dirty_synchronous(void) {
     /* В transmitter.c при генерации для этого теста временно важна жесткая сетка.
        Мы используем функцию decode_fsk_wav, но добавим в нее вызов apply_hard_limiter! */
     printf("  -> Генерируем грязный пакет 'в стык'...\n");
-    generate_fsk_wav(test_payload, 4, FREQ_DOWNLINK, "stage5_2_dirty_sync.wav", 0);
+    generate_fsk_wav(test_payload, 4, FREQ_DOWNLINK, "stage5_2_dirty_sync.wav", 1);
 
     /* Модифицируем decode_fsk_wav, чтобы она внутри использовала apply_hard_limiter.
        Если она сможет прочесть — значит, фильтры Гёрцеля аппаратно справляются с шумом меандра! */
