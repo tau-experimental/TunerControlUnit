@@ -257,10 +257,6 @@ int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned c
     unsigned char *rx_symbols;
     Goertzel_Fx detectors[3];
 
-    /* Буфер истории для скользящего окна Гёрцеля */
-    fixed_t history_buffer[SYMBOL_LEN] = {0};
-    int history_idx = 0;
-
     if (!filename || !freqs || !out_payload) return -1;
     f_in = fopen(filename, "rb");
     if (!f_in) return -1;
@@ -275,77 +271,81 @@ int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned c
     rx_symbols = (unsigned char *)malloc(num_samples);
     rx_sym_count = 0; in_packet = 0; expected_symbols = 9999; payload_len = 0;
 
-    /* Состояния автомата синхронизации битовых часов */
     int bit_clock_synced = 0;
     int last_winner = -1;
     int transition_idx = -1;
 
-    /* Благодаря жесткому ограничителю амплитуд, порог энергии теперь СТАТИЧЕН
-       и равен стабильным 1500 единицам, независимо от затухания кабеля! */
-    fixed_t ENERGY_THRESHOLD = INT_TO_FX(100);
+    /*
+     * ТЮНИНГ ПОРОГА ДЛЯ СЛУЧАЙНОЙ ПАУЗЫ:
+     * Выставляем порог в 40 единиц. Наш полезный сигнал (94..108) пробьет его
+     * со стопроцентной гарантией, а шум в паузе (0.0) останется снизу.
+     */
+    fixed_t ENERGY_THRESHOLD = INT_TO_FX(40);
 
-    printf("\n--- СТАРТ ЭТАПА №5 (АРУ/ЛИМИТЕР + СЛЕМПОЙ ПОИСК): %s ---\n", filename);
+    printf("\n--- СТАРТ ДИНАМИЧЕСКОГО ПРИЕМНИКА (ЭТАП 5) ---\n");
 
     idx = 0;
-    while (idx < num_samples) {
-        int adc_sample = (int)samples[idx] / 256;
-
-        /* КРИТИЧЕСКИЙ ФИКС: Пропускаем сигнал через жесткий ограничитель!
-           Он полностью уничтожает затухание 10 дБ и выравнивает шкалу энергий. */
-        fixed_t fx_sample = apply_hard_limiter(adc_sample);
-
-        fixed_t old_sample = history_buffer[history_idx];
-        history_buffer[history_idx] = fx_sample;
-        history_idx = (history_idx + 1) % SYMBOL_LEN;
-
-        fixed_t amplitudes[3] = {0};
+    while (idx < num_samples - SYMBOL_LEN) {
+        fixed_t amplitudes[3] = {0, 0, 0};
         fixed_t max_amp = -1;
         int winner_sym = 0;
 
+        /* Очищаем Блочный Гёрцель */
+        for (i = 0; i < 3; i++) goertzel_fx_reset(&detectors[i]);
+
+        /* Анализируем окно из 32 отсчетов от текущего 'idx' */
+        for (t = 0; t < SYMBOL_LEN; t++) {
+            int adc_sample = (int)samples[idx + t] / 256;
+            fixed_t fx_sample = apply_hard_limiter(adc_sample);
+
+            for (i = 0; i < 3; i++) {
+                fixed_t res = goertzel_block_process(&detectors[i], fx_sample);
+                if (res >= 0) amplitudes[i] = res;
+            }
+        }
+
         for (i = 0; i < 3; i++) {
-            amplitudes[i] = goertzel_sliding_process(&detectors[i], fx_sample, old_sample);
             if (amplitudes[i] > max_amp) {
                 max_amp = amplitudes[i];
                 winner_sym = i;
             }
         }
 
-        /* ФАЗА 0: СЛЕПОЙ ПОИСК ПЕРЕКЛЮЧЕНИЯ ЧАСТОТ ПРЕАМБУЛЫ */
+        /* ФАЗА 0: СЛЕПОЙ ПОИСК ПЕРЕКЛЮЧЕНИЙ ПРЕАМБУЛЫ (ШАГ ПО 1 ОТСЧЕТУ) */
         if (!bit_clock_synced) {
             if (max_amp > ENERGY_THRESHOLD) {
                 if (last_winner != -1 && winner_sym != last_winner) {
-                    /* Зафиксирован четкий частотный переход на отсчете 'idx'! */
+                    /* Нашли фронт переключения частот! */
                     if (transition_idx == -1) {
                         transition_idx = idx;
                     } else {
                         int delta_time = idx - transition_idx;
-                        /* Если расстояние между переключениями частот равно длине символа (+/- 2 отсчета) */
-                        if (delta_time >= (SYMBOL_LEN - 2) && delta_time <= (SYMBOL_LEN + 2)) {
-                            printf("   ===> [CLOCK] Битовые часы зафиксированы! Переключение на шаге: %d (Delta: %d) <===\n", idx, delta_time);
+                        /* Если расстояние между переключениями совпало с длительностью символа */
+                        if (delta_time >= (SYMBOL_LEN - 3) && delta_time <= (SYMBOL_LEN + 3)) {
+                            printf("   ===> [CLOCK] Сетка битовых часов защелкнута на отсчете: %d! (Delta: %d) <===\n", idx, delta_time);
                             bit_clock_synced = 1;
 
-                            /* Прыгаем на SYMBOL_LEN / 2 отсчетов вперед, прямо в центр стабильного плато частоты */
+                            /* Прыгаем в центр следующего стабильного символа */
                             idx += (SYMBOL_LEN / 2);
                             last_winner = winner_sym;
                             continue;
                         } else {
-                            transition_idx = idx; /* Перезапуск захвата при ложном шуме */
+                            transition_idx = idx; /* Глитч шума, перезахват */
                         }
                     }
                 }
                 last_winner = winner_sym;
             }
-            idx++; /* До захвата часов плавно скользим по 1 отсчету */
+            idx++; /* В режиме поиска скользим плавно по 1 отсчету */
             continue;
         }
 
-        /* ФАЗА 1: ДИСКРЕТНОЕ ДЕКОДИРОВАНИЕ СИМВОЛОВ ВРАЩЕНИЯ ПО ЦЕНТРАМ */
+        /* ФАЗА 1: ДИСКРЕТНЫЙ ПРИЕМ ПАКЕТА (ЖЕСТКИЙ ШАГ ПО СИМВОЛАМ) */
         unsigned char decoded_bit = descramble_bit(winner_sym, last_winner);
         last_winner = winner_sym;
 
         rx_symbols[rx_sym_count++] = decoded_bit;
 
-        /* Побайтовая сборка кадра */
         if (rx_sym_count >= BITS_PER_BYTE && rx_sym_count % BITS_PER_BYTE == 0) {
             int byte_start_pos = rx_sym_count - BITS_PER_BYTE;
             unsigned char assembled_byte = 0;
@@ -358,40 +358,35 @@ int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned c
             unsigned char local_parity = calculate_odd_parity(assembled_byte);
 
             if (rx_parity != local_parity) {
-                /* Если скремблированный мусор в паузе выдал ложную контрольную сумму — сбрасываем */
                 if (!in_packet) {
+                    /* Мусор в паузе ложно прикинулся байтом — сбрасываем часы */
                     bit_clock_synced = 0; transition_idx = -1; rx_sym_count = 0; idx++; continue;
                 } else {
-                    free(samples); free(rx_symbols); return -2; /* Реальная ошибка паритета в пакете */
+                    free(samples); free(rx_symbols); return -2; /* Ошибка четности в пакете */
                 }
             }
 
-            /* Ищем маркер SOF кадра данных */
             if (!in_packet && assembled_byte == SOF_BYTE) {
                 in_packet = 1;
-                rx_sym_count = 0; /* Синхронизируем буфер под полезный Payload */
-                printf("   ===> [SYNC] Маркер кадра SOF (0x7E) успешно распознан ограничителем! Принимаем данные... <===\n");
+                rx_sym_count = 0;
+                printf("   ===> [SYNC] Маркер SOF (0x7E) успешно распознан из шума! Принимаем данные... <===\n");
                 idx += SYMBOL_LEN;
                 continue;
             }
 
             if (in_packet) {
-                /* Извлекаем длину полезных данных пакета */
                 if (rx_sym_count == BITS_PER_BYTE) {
                     payload_len = assembled_byte;
-                    printf("   -> [PACKET] Длина полезной нагрузки: %d байт\n", payload_len);
                     if (payload_len > MAX_PAYLOAD || payload_len <= 0) {
                         in_packet = 0; bit_clock_synced = 0; transition_idx = -1; rx_sym_count = 0; expected_symbols = 9999;
                     } else {
-                        /* Всего символов кадра: (Len_byte + Payload + CRC_byte) * 9 бит */
                         expected_symbols = (1 + payload_len + 1) * BITS_PER_BYTE;
                     }
                 }
 
-                /* Когда весь пакет полностью собран на дискретной сетке */
                 if (rx_sym_count >= expected_symbols) {
                     unsigned char calc_crc = 0;
-                    int p_idx = BITS_PER_BYTE; /* Пропускаем байт длины */
+                    int p_idx = BITS_PER_BYTE;
                     int out_idx = 0;
 
                     for (i = 0; i < payload_len; i++) {
@@ -406,13 +401,13 @@ int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned c
                     for (t = 0; t < 8; t++) rx_crc |= (rx_symbols[p_idx + t] << (7 - t));
 
                     free(samples); free(rx_symbols);
-                    if (calc_crc == rx_crc) return payload_len; /* ПОЛНЫЙ УСПЕХ! */
-                    return -3; /* Ошибка CRC */
+                    if (calc_crc == rx_crc) return payload_len;
+                    return -3;
                 }
             }
         }
 
-        idx += SYMBOL_LEN; /* В режиме фиксации часов прыгаем строго по центрам плато */
+        idx += SYMBOL_LEN; /* Прыгаем по центрам плато символов */
     }
 
     free(samples); free(rx_symbols);
