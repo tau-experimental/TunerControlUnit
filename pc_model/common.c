@@ -1,7 +1,7 @@
 #include "common.h"
 
-const double FREQ_DOWNLINK[4] = {1200.0, 1500.0, 1800.0, 2100.0};
-const double FREQ_UPLINK[4]   = {350.0,  450.0,  550.0,  650.0};
+const double FREQ_DOWNLINK[FREQ_BANDS] = {1000.0, 1400.0, 1800.0};
+const double FREQ_UPLINK[FREQ_BANDS]   = {350.0,  750.0,  1150.0};
 
 unsigned char update_crc8(unsigned char crc, unsigned char data) {
     int i;
@@ -17,8 +17,56 @@ unsigned char update_crc8(unsigned char crc, unsigned char data) {
 }
 
 void byte_to_symbols(unsigned char b, unsigned char *syms) {
-    syms[0] = (b >> 6) & 0x03;
-    syms[1] = (b >> 4) & 0x03;
-    syms[2] = (b >> 2) & 0x03;
-    syms[3] = b & 0x03;
+	syms[0] = (b >> 6) & 0x03;
+	syms[1] = (b >> 4) & 0x03;
+	syms[2] = (b >> 2) & 0x03;
+	syms[3] = b & 0x03;
+}
+
+/*
+ * Вычисляет бит нечётности (Odd Parity) для 8-битного байта.
+ * Возвращает 1, если количество единиц в байте чётное (чтобы сумма с битом стала нечётной),
+ * и 0, если количество единиц уже нечётное.
+ */
+unsigned char calculate_odd_parity(unsigned char data_byte) {
+    unsigned char count = 0;
+    unsigned char temp = data_byte;
+    while (temp) {
+        count += (temp & 0x01);
+        temp >>= 1;
+    }
+    /* Для Odd Parity: если сумма единиц чётная, нам нужна 1 */
+    return (count % 2 == 0) ? 1 : 0;
+}
+
+unsigned char scramble_bit(unsigned char bit, unsigned char prev_encoded_sym) {
+    unsigned char p = prev_encoded_sym % 3;
+    if ((bit & 0x01) == 0) {
+        /* Бит 0: шаг по часовой стрелке (+1) */
+        return (p + 1) % 3;
+    } else {
+        /* Бит 1: шаг против часовой стрелки (-1, что в поле %3 равно +2) */
+        return (p + 2) % 3;
+    }
+}
+
+/*
+ * Декодирование одного бита.
+ * Принимает текущую частоту из линии (0..2) и предыдущую частоту (0..2).
+ * Возвращает восстановленный бит (0 или 1).
+ */
+unsigned char descramble_bit(unsigned char encoded_sym, unsigned char prev_encoded_sym) {
+    unsigned char p = prev_encoded_sym % 3;
+    unsigned char e = encoded_sym % 3;
+
+    /* Вычисляем физический шаг сдвига в кольце */
+    unsigned char shift = (e + 3 - p) % 3;
+
+    if (shift == 1) {
+        return 0; /* Шаг +1 означает, что передавали бит 0 */
+    } else if (shift == 2) {
+        return 1; /* Шаг +2 (или -1) означает, что передавали бит 1 */
+    }
+
+    return 0; /* Дефолтный возврат при ошибке (сдвиг 0 физически невозможен) */
 }

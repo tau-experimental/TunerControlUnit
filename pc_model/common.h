@@ -2,8 +2,10 @@
 #define COMMON_H
 
 #define FS 8000
-#define SYMBOL_LEN 16
+#define SYMBOL_LEN 32
 #define MAX_PAYLOAD 16
+
+#define BITS_PER_BYTE 9  /* 8 бит данных + 1 бит четности */
 
 #define PREAMBLE_BYTE 0xAA
 #define SOF_BYTE      0x7E
@@ -12,8 +14,9 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-extern const double FREQ_DOWNLINK[4];
-extern const double FREQ_UPLINK[4];
+#define FREQ_BANDS	3
+extern const double FREQ_DOWNLINK[FREQ_BANDS];
+extern const double FREQ_UPLINK[FREQ_BANDS];
 
 #pragma pack(push, 1)
 typedef struct {
@@ -35,5 +38,10 @@ typedef struct {
 
 unsigned char update_crc8(unsigned char crc, unsigned char data);
 void byte_to_symbols(unsigned char b, unsigned char *syms);
+
+unsigned char calculate_odd_parity(unsigned char data_byte);
+
+unsigned char scramble_bit(unsigned char bit, unsigned char prev_encoded_sym);
+unsigned char descramble_bit(unsigned char encoded_sym, unsigned char prev_encoded_sym);
 
 #endif /* COMMON_H */

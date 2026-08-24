@@ -43,34 +43,41 @@ fixed_t goertzel_fx_process(Goertzel_Fx *g, fixed_t sample) {
 /* Обновленный потоковый Sliding Goertzel.
    Принимает текущий отсчет и САМЫЙ СТАРЫЙ отсчет из буфера истории (16 шагов назад) */
 fixed_t goertzel_sliding_process(Goertzel_Fx *g, fixed_t sample, fixed_t old_sample) {
-    /* Формула Sliding DFT / Goertzel:
-       Входным сигналом для рекурсии становится разность текущего и старого отсчетов */
+    /* Входной дифференциальный сигнал */
     fixed_t delta = sample - old_sample;
 
+    /* Основное рекуррентное уравнение Гёрцеля */
     g->q0 = delta + fx_mul(g->coeff, g->q1) - g->q2;
     g->q2 = g->q1;
     g->q1 = g->q0;
 
-    /* На скользящем окне энергия ДОСТУПНА НА КАЖДОМ ОТСЧЕТЕ! */
-    fixed_t q1_scaled = g->q1 >> 3;
-    fixed_t q2_scaled = g->q2 >> 3;
+    /*
+     * КРИТИЧЕСКИЙ ФИКС ДЛЯ ДЛИННЫХ ОКОН (N >= 32):
+     * Увеличиваем сдвиг с >> 3 до >> 5 (деление на 32).
+     * Это гарантированно удержит q1_scaled и q2_scaled в диапазоне,
+     * где их квадраты не переполнят верхнюю границу int32_t.
+     */
+    fixed_t q1_scaled = g->q1 >> 5;
+    fixed_t q2_scaled = g->q2 >> 5;
 
     fixed_t q1_sq = fx_mul(q1_scaled, q1_scaled);
     fixed_t q2_sq = fx_mul(q2_scaled, q2_scaled);
     fixed_t coeff_q1_q2 = fx_mul(fx_mul(g->coeff, q1_scaled), q2_scaled);
 
-    return (q1_sq + q2_sq - coeff_q1_q2);
+    fixed_t magnitude_sq = q1_sq + q2_sq - coeff_q1_q2;
+
+    /* Возвращаем чистую, защищенную от переполнений энергию */
+    return magnitude_sq;
 }
 
 int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out_payload) {
     FILE *f_in;
     WavHeader header;
-    int num_samples, max_possible_syms, rx_sym_count, in_packet, expected_symbols, payload_len, idx, i;
+    int num_samples, payload_len, idx, i, t;
     short *samples;
-    unsigned char *rx_symbols;
-    Goertzel_Fx detectors[4];
+    Goertzel_Fx detectors[3];
 
-    /* Кольцевой буфер истории АЦП на 16 элементов */
+    /* Кольцевой буфер истории АЦП на 32 элемента */
     fixed_t history_buffer[SYMBOL_LEN] = {0};
     int history_idx = 0;
 
@@ -78,136 +85,89 @@ int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out
 
     f_in = fopen(filename, "rb");
     if (!f_in) return -1;
-
-    if (fread(&header, sizeof(WavHeader), 1, f_in) != 1) {
-        fclose(f_in); return -1;
-    }
+    if (fread(&header, sizeof(WavHeader), 1, f_in) != 1) { fclose(f_in); return -1; }
 
     num_samples = header.subchunk2Size / 2;
     samples = (short *)malloc(num_samples * sizeof(short));
-    if (!samples) { fclose(f_in); return -1; }
-
-    if (fread(samples, sizeof(short), num_samples, f_in) != num_samples) {
-        free(samples); fclose(f_in); return -1;
-    }
+    if (fread(samples, sizeof(short), num_samples, f_in) != num_samples) { free(samples); fclose(f_in); return -1; }
     fclose(f_in);
 
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 3; i++) {
         goertzel_fx_init(&detectors[i], freqs[i], SYMBOL_LEN);
     }
 
-    max_possible_syms = num_samples;
-    rx_symbols = (unsigned char *)malloc(max_possible_syms);
+    /* Вычисляем, сколько байт заложено в файле */
+    payload_len = num_samples / (SYMBOL_LEN * BITS_PER_BYTE);
 
-    rx_sym_count = 0;
-    in_packet = 0;
-    expected_symbols = 9999;
-    payload_len = 0;
+    unsigned char prev_decoded = 0; /* Стартовая опора вращения (0..2) */
+    int byte_idx = 0;
+    int total_symbol_counter = 0;
 
-    /* Железный порог энергии для непрерывного резонанса скользящего окна */
-    fixed_t ENERGY_THRESHOLD = INT_TO_FX(5000);
-    int lock_countdown = 0;
+    /* Выделяем буфер под принятые биты для текущего байта (8 данных + 1 четность) */
+    unsigned char rx_bits[9];
 
-    printf("\n--- СТАРТ ЧЕСТНОГО СКОЛЬЗЯЩЕГО ЦОС-ОКНА: %s ---\n", filename);
+    /* Сквозной линейный проход по файлу без прыжков индексов */
+    for (byte_idx = 0; byte_idx < payload_len; byte_idx++) {
+        unsigned char assembled_byte = 0;
+        int bit_pos;
 
-    for (idx = 0; idx < num_samples; idx++) {
-        int adc_sample = (int)samples[idx] / 256;
-        fixed_t fx_sample = INT_TO_FX(adc_sample); /* Полный масштаб АЦП */
+        /* Читаем ровно 9 символов подряд (8 данных + 1 паритет) */
+        for (bit_pos = 0; bit_pos < 9; bit_pos++) {
+            /* Вычисляем стартовый индекс текущего символа в файле */
+            idx = total_symbol_counter * SYMBOL_LEN;
+            total_symbol_counter++;
 
-        /* Извлекаем самый старый отсчет из кольцевого буфера истории */
-        fixed_t old_sample = history_buffer[history_idx];
-        /* Записываем текущий отсчет на его место */
-        history_buffer[history_idx] = fx_sample;
-        history_idx = (history_idx + 1) % SYMBOL_LEN;
+            fixed_t amplitudes[3] = {0, 0, 0};
+            fixed_t max_amp = -1;
+            int winner_sym = 0;
 
-        fixed_t amplitudes[4] = {0};
-        fixed_t max_amp = -1;
-        int winner_sym = 0;
+            /* Прокачиваем 32 отсчета синуса через скользящий Гёрцель */
+            for (t = 0; t < SYMBOL_LEN; t++) {
+                int adc_sample = (int)samples[idx + t] / 256;
+                fixed_t fx_sample = INT_TO_FX(adc_sample);
 
-        /* Обновляем Sliding Goertzel на КАЖДОМ шаге АЦП */
-        for (i = 0; i < 4; i++) {
-            amplitudes[i] = goertzel_sliding_process(&detectors[i], fx_sample, old_sample);
-            if (amplitudes[i] > max_amp) {
-                max_amp = amplitudes[i];
-                winner_sym = i;
+                fixed_t old_sample = history_buffer[history_idx];
+                history_buffer[history_idx] = fx_sample;
+                history_idx = (history_idx + 1) % SYMBOL_LEN;
+
+                for (i = 0; i < 3; i++) {
+                    amplitudes[i] = goertzel_sliding_process(&detectors[i], fx_sample, old_sample);
+                }
             }
+
+            /* На последнем отсчете символа определяем доминирующую частоту */
+            for (i = 0; i < 3; i++) {
+                if (amplitudes[i] > max_amp) {
+                    max_amp = amplitudes[i];
+                    winner_sym = i;
+                }
+            }
+
+            /* Декодируем направление вращения относительно ПРЕДЫДУЩЕГО символа линии */
+            rx_bits[bit_pos] = descramble_bit(winner_sym, prev_decoded);
+
+            /* Важно: текущий символ становится опорой для СЛЕДУЮЩЕГО шага (кольцо непрерывно!) */
+            prev_decoded = winner_sym;
         }
 
-        /* Защитный тайм-аут удержания символа (чтобы не двоить один и тот же символ 16 раз) */
-        if (lock_countdown > 0) {
-            lock_countdown--;
-            continue;
+        /* Собираем первые 8 бит обратно в байт данных (от MSB к LSB) */
+        for (i = 0; i < 8; i++) {
+            assembled_byte |= (rx_bits[i] << (7 - i));
         }
 
-        /* Фиксация превышения порога */
-        if (max_amp > ENERGY_THRESHOLD) {
-            rx_symbols[rx_sym_count++] = (unsigned char)winner_sym;
+        /* 9-й принятый бит — это Parity */
+        unsigned char rx_parity_bit = rx_bits[8];
+        unsigned char local_parity_bit = calculate_odd_parity(assembled_byte);
 
-            /* Блокируем чтение на следующие 16 отсчетов, так как мы считали
-               центр текущего символа и перескакиваем через его тело */
-            lock_countdown = SYMBOL_LEN - 1;
-
-            if (!in_packet) {
-                printf("SampleIdx: %5d | WIN: %d | MaxAmp: %7.2f [CLOCK CAPTURED]\n",
-                       idx, winner_sym, FX_TO_DOUBLE(max_amp));
-            } else {
-                printf("SymIdx: %3d | WIN: %d | Amp: %7.2f | ", rx_sym_count, winner_sym, FX_TO_DOUBLE(max_amp));
-            }
-
-            /* Сборка байта из 4-х дискретных символов */
-            if (in_packet || rx_sym_count >= 4) {
-                int last_idx = rx_sym_count - 4;
-                unsigned char assembled_byte = (rx_symbols[last_idx] << 6) |
-                                               (rx_symbols[last_idx+1] << 4) |
-                                               (rx_symbols[last_idx+2] << 2) |
-                                               rx_symbols[last_idx+3];
-
-                if (in_packet && rx_sym_count % 4 == 0) {
-                    printf("Assembled Byte: 0x%02X\n", assembled_byte);
-                }
-
-                if (!in_packet && assembled_byte == SOF_BYTE) {
-                    in_packet = 1;
-                    rx_sym_count = 0; /* Синхронизируем буфер под полезные данные кадра */
-                    printf("\n   ===> [SYNC] Маркер SOF (0x7E) успешно пойман! Читаем пакет... <===\n");
-                }
-            }
-
-            if (in_packet) {
-                /* Извлечение длины */
-                if (rx_sym_count == 4 && expected_symbols == 9999) {
-                    payload_len = (rx_symbols[0] << 6) | (rx_symbols[1] << 4) | (rx_symbols[2] << 2) | rx_symbols[3];
-                    printf("   -> [PACKET] Длина полезной нагрузки: %d байт\n", payload_len);
-                    if (payload_len > MAX_PAYLOAD || payload_len <= 0) {
-                        /* Защита от мусора */
-                        in_packet = 0; rx_sym_count = 0; expected_symbols = 9999;
-                    } else {
-                        expected_symbols = (1 + payload_len + 1) * 4;
-                    }
-                }
-
-                /* Валидация пакета по CRC-8 */
-                if (rx_sym_count >= expected_symbols) {
-                    unsigned char calc_crc = 0;
-                    int b_idx = 0;
-
-                    for (i = 4; i < expected_symbols - 4; i += 4) {
-                        unsigned char b = (rx_symbols[i] << 6) | (rx_symbols[i+1] << 4) | (rx_symbols[i+2] << 2) | rx_symbols[i+3];
-                        out_payload[b_idx++] = b;
-                        calc_crc = update_crc8(calc_crc, b);
-                    }
-
-                    int crc_pos = expected_symbols - 4;
-                    unsigned char rx_crc = (rx_symbols[crc_pos] << 6) | (rx_symbols[crc_pos+1] << 4) | (rx_symbols[crc_pos+2] << 2) | rx_symbols[crc_pos+3];
-
-                    free(samples); free(rx_symbols);
-                    if (calc_crc == rx_crc) return payload_len;
-                    return -2;
-                }
-            }
+        /* Проверяем целостность нечётности кадра */
+        if (rx_parity_bit != local_parity_bit) {
+            free(samples);
+            return -2; /* Ошибка Parity: неверно распознан вектор вращения */
         }
+
+        out_payload[byte_idx] = assembled_byte;
     }
 
-    free(samples); free(rx_symbols);
-    return -1;
+    free(samples);
+    return payload_len;
 }
