@@ -17,10 +17,10 @@ extern const double FREQ_UPLINK[4];
 
 #pragma pack(push, 1)
 typedef struct {
-    char chunkID[4];
+    char chunkID[4];         /* Должен быть массив из 4 символов, а не одиночный char! */
     unsigned int chunkSize;
-    char format[4];
-    char subchunk1ID[4];
+    char format[4];          /* Тоже массив из 4 символов! */
+    char subchunk1ID[4];     /* Массив */
     unsigned int subchunk1Size;
     unsigned short audioFormat;
     unsigned short numChannels;
@@ -28,7 +28,7 @@ typedef struct {
     unsigned int byteRate;
     unsigned short blockAlign;
     unsigned short bitsPerSample;
-    char subchunk2ID[4];
+    char subchunk2ID[4];     /* Массив */
     unsigned int subchunk2Size;
 } WavHeader;
 #pragma pack(pop)

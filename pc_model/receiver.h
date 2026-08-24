@@ -7,7 +7,7 @@
 
 typedef struct {
     fixed_t coeff;
-    fixed_t q0, q1, q2;
+    int32_t q0, q1, q2;
     int count;
     int len;
 } Goertzel_Fx;
