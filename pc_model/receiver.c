@@ -5,9 +5,10 @@
 #include <string.h>
 #include <math.h>
 
-static GoertzelState_t g_state[3];
+static GoertzelState_t g_state_A[3], g_state_B[3];
 static int goertzel_sample_count = 0;
 static int goertzel_timer = 0;
+static int cascade_timer = 0;
 
 // Optimized Q12 Coefficients: 5793 (1000Hz), 3135 (1500Hz), 0 (2000Hz)
 static const int16_t GOERTZEL_COEFFS[3] = {5793, 3135, 0};
@@ -19,11 +20,11 @@ int8_t process_goertzel_sample_10bit(uint16_t sample_10bit) {
     // 2. Основной цикл фильтра Гёрцеля
     for (int f = 0; f < 3; f++) {
         // Вычисляем обратную связь в Q12 формате: (coeff * v1) / 4096
-        int32_t feedback = (GOERTZEL_COEFFS[f] * g_state[f].v1) >> 12;
+        int32_t feedback = (GOERTZEL_COEFFS[f] * g_state_A[f].v1) >> 12;
 
-        int32_t v0 = x + feedback - g_state[f].v2;
-        g_state[f].v2 = g_state[f].v1;
-        g_state[f].v1 = v0;
+        int32_t v0 = x + feedback - g_state_A[f].v2;
+        g_state_A[f].v2 = g_state_A[f].v1;
+        g_state_A[f].v1 = v0;
     }
 
     goertzel_sample_count++;
@@ -37,9 +38,9 @@ int8_t process_goertzel_sample_10bit(uint16_t sample_10bit) {
 
         for (int f = 0; f < 3; f++) {
             // Вычисление квадрата амплитуды: E = v1^2 + v2^2 - (coeff * v1 * v2) >> 12
-            int64_t v1_sq = (int64_t)g_state[f].v1 * g_state[f].v1;
-            int64_t v2_sq = (int64_t)g_state[f].v2 * g_state[f].v2;
-            int64_t cross_term = ((int64_t)GOERTZEL_COEFFS[f] * g_state[f].v1 * g_state[f].v2) >> 12;
+            int64_t v1_sq = (int64_t)g_state_A[f].v1 * g_state_A[f].v1;
+            int64_t v2_sq = (int64_t)g_state_A[f].v2 * g_state_A[f].v2;
+            int64_t cross_term = ((int64_t)GOERTZEL_COEFFS[f] * g_state_A[f].v1 * g_state_A[f].v2) >> 12;
 
             // Защита от переполнения: сдвигаем 64-битный результат в int32 диапазон.
             // При 10-битном входе сдвиг >> 12 или >> 14 даст отличный контролируемый масштаб энергии.
@@ -51,8 +52,8 @@ int8_t process_goertzel_sample_10bit(uint16_t sample_10bit) {
             }
 
             // Обнуляем детекторы для следующего символа кадра
-            g_state[f].v1 = 0;
-            g_state[f].v2 = 0;
+            g_state_A[f].v1 = 0;
+            g_state_A[f].v2 = 0;
         }
 
         // Возвращаем чистый индекс частоты для дифференциального FSM-демодулятора
@@ -274,20 +275,38 @@ void process_incoming_bit(uint8_t incoming_bit) {
     }
 }
 
+static int32_t dc_x_prev = 0;
+static int32_t dc_y_prev = 0;
 /**
  * Обработка одного потокового 10-битного сэмпла из АЦП (0..1023)
  */
 void process_adc_sample_stream(uint16_t sample_10bit) {
-    fsm.sample_counter++;
+	GoertzelState_t *active_cascade = 0;
+	int in_packet = 0;
+	fsm.sample_counter++;
     goertzel_timer++;
+    cascade_timer++;
+
+    // =========================================================================
+    // HARDWARE INSURANCE: THE ACTIVE DIGITAL DC BLOCKER
+    // =========================================================================
+    //int32_t x = (int32_t)sample_10bit - 511; /* такой способ компенсации  слишком тупой. А вдруг не 511? */
+    int32_t x_raw = (int32_t)sample_10bit;
+    // High-pass filter wipes out the massive DC pedestal completely on the fly!
+    int32_t x = x_raw - dc_x_prev + dc_y_prev - (dc_y_prev >> 7);
+    dc_x_prev = x_raw;
+    dc_y_prev = x;
 
     // 1. Накапливаем текущий сэмпл в фильтрах Гёрцеля
-    int32_t x = (int32_t)sample_10bit - 511;
     for (int f = 0; f < 3; f++) {
-        int32_t feedback = (GOERTZEL_COEFFS[f] * g_state[f].v1) >> 12;
-        int32_t v0 = x + feedback - g_state[f].v2;
-        g_state[f].v2 = g_state[f].v1;
-        g_state[f].v1 = v0;
+        int32_t feedback_A = (GOERTZEL_COEFFS[f] * g_state_A[f].v1) >> 12;
+        int32_t feedback_B = (GOERTZEL_COEFFS[f] * g_state_B[f].v1) >> 12;
+        int32_t v0_A = x + feedback_A - g_state_A[f].v2;
+        int32_t v0_B = x + feedback_B - g_state_B[f].v2;
+        g_state_A[f].v2 = g_state_A[f].v1;
+        g_state_B[f].v2 = g_state_B[f].v1;
+        g_state_A[f].v1 = v0_A;
+        g_state_B[f].v1 = v0_B;
     }
 
     // =========================================================================
@@ -295,29 +314,32 @@ void process_adc_sample_stream(uint16_t sample_10bit) {
     // =========================================================================
     if (fsm.state == RXSTATE_SEARCH_CLK) {
 
-        // Каждые 8 сэмплов (четверть символа) мы оцениваем промежуточную энергию.
+        // Было:
+    	// Каждые 8 сэмплов (четверть символа) мы оцениваем промежуточную энергию.
         // Это не дает фильтру "залипать" на старой частоте и позволяет четко видеть фронты.
-        if (goertzel_timer >= 8) {
-            goertzel_timer = 0; // Сброс локального таймера окна поиска
+    	// Надо сделать: два каскада (g_state_A и g_state_B) со сдвигом фаз на 16 сэмплов
+    	if (cascade_timer % 16 == 0) {
+            //goertzel_timer = 0; // Сброс локального таймера окна поиска
+    		active_cascade = (cascade_timer % 32 == 0) ? g_state_A : g_state_B;
 
             int32_t max_energy = -1;
             int8_t current_freq = -1;
 
             for (int f = 0; f < 3; f++) {
-                int64_t v1_sq = (int64_t)g_state[f].v1 * g_state[f].v1;
-                int64_t v2_sq = (int64_t)g_state[f].v2 * g_state[f].v2;
-                int64_t cross_term = ((int64_t)GOERTZEL_COEFFS[f] * g_state[f].v1 * g_state[f].v2) >> 12;
-                int32_t energy = (int32_t)((v1_sq + v2_sq - cross_term) >> 12);
+                int64_t v1_sq_A = (int64_t)active_cascade[f].v1 * active_cascade[f].v1;
+                int64_t v2_sq_A = (int64_t)active_cascade[f].v2 * active_cascade[f].v2;
+                int64_t cross_term_A = ((int64_t)GOERTZEL_COEFFS[f] * active_cascade[f].v1 * active_cascade[f].v2) >> 12;
+                int32_t energy_A = (int32_t)((v1_sq_A + v2_sq_A - cross_term_A) >> 12);
 
-                if (energy > max_energy) {
-                    max_energy = energy;
+                if (energy_A > max_energy) {
+                    max_energy = energy_A;
                     current_freq = f;
                 }
 
                 // ВАЖНО: Сбрасываем накопители! Нам нужна мгновенная реакция
                 // на текущие 8 сэмплов, а не история за весь прошлый век.
-                g_state[f].v1 = 0;
-                g_state[f].v2 = 0;
+                active_cascade[f].v1 = 0;
+                active_cascade[f].v2 = 0;
             }
 
             // Вывод для контроля энергий в Audacity / консоли
@@ -350,7 +372,8 @@ void process_adc_sample_stream(uint16_t sample_10bit) {
 
 						if (fsm.sync_confidence >= 3) {
 							printf("[FSM LOCK] ===> ЧАСЫ ЗАХВАЧЕНЫ МАТЕМАТИЧЕСКИ! <===\n");
-							fsm.state = STATE_WAIT_SOF;
+							fsm.state = RXSTATE_WAIT_TRAP;
+							in_packet = 1;
 							goertzel_timer = fsm.refined_symbol_len / 2;
 						}
 					} else {
@@ -384,40 +407,55 @@ void process_adc_sample_stream(uint16_t sample_10bit) {
 
         int32_t max_energy = -1;
         int8_t winner_freq = 0;
+        int32_t total_energy = 0; // Сумма энергий всех частот для оценки шума
 
         for (int f = 0; f < 3; f++) {
-            int64_t v1_sq = (int64_t)g_state[f].v1 * g_state[f].v1;
-            int64_t v2_sq = (int64_t)g_state[f].v2 * g_state[f].v2;
-            int64_t cross_term = ((int64_t)GOERTZEL_COEFFS[f] * g_state[f].v1 * g_state[f].v2) >> 12;
-            int32_t energy = (int32_t)((v1_sq + v2_sq - cross_term) >> 12);
+            int64_t v1_sq = (int64_t)g_state_A[f].v1 * g_state_A[f].v1;
+            int64_t v2_sq = (int64_t)g_state_A[f].v2 * g_state_A[f].v2;
+            int64_t cross_term = ((int64_t)GOERTZEL_COEFFS[f] * g_state_A[f].v1 * g_state_A[f].v2) >> 12;
+
+            int32_t energy = (int32_t)((v1_sq + v2_sq - cross_term) >> 14);
+            if (energy < 0) energy = 0; // Защита от знакового переполнения
+
+            total_energy += energy;
 
             if (energy > max_energy) {
                 max_energy = energy;
                 winner_freq = f;
             }
             // Чистим накопители для следующего такта
-            g_state[f].v1 = 0; g_state[f].v2 = 0;
+            g_state_A[f].v1 = 0;
+            g_state_A[f].v2 = 0;
         }
 
-        // Аппаратный Squelch внутри пакета
-        if (max_energy < (SIGNAL_THRESHOLD / 2)) {
-            printf("[FSM DROP] Сигнал упал ниже порога. Возврат в поиск.\n");
+        // ОТНОСИТЕЛЬНЫЙ SQUELCH (SNR-ДЕТЕКТОР):
+        // Вычисляем среднюю энергию шума на "холостых" частотах.
+        // Энергия шума = (Сумма всех - Максимальная) / 2
+        int32_t noise_floor = (total_energy - max_energy) / 2;
+
+        //if ((max_energy * 2) < (noise_floor * 3) && in_packet) {
+        // Объединенная проверка: если энергии критически мало ИЛИ сигнал утонул в шуме
+        printf("Total Energy: %d\n", total_energy);
+        if ((total_energy < ABSOLUTE_MIN_ENERGY || (max_energy * 2) < (noise_floor * 3))) {
+
+            printf("[FSM DROP] Канал пуст или забит шумом; возврат в поиск.\n");
             fsm.state = RXSTATE_SEARCH_CLK;
+            current_state = STATE_SEARCH_PREAMBLE;
             fsm.sync_confidence = 0;
+            goertzel_timer = 0;
+            in_packet = 0;
             return;
         }
 
-        // Вычисляем бит через дифференциальный демодулятор («треугольник»)
+        // Вычисляем бит через наш треугольник частот
         uint8_t current_bit = demodulate_frequency_to_bit(winner_freq, fsm.last_raw_freq);
         fsm.last_raw_freq = winner_freq;
 
         if (current_bit != 0xFF) {
             // Вдвигаем бит в наш 9-битный FIFO
-            fsm.rx_fifo = ((fsm.rx_fifo << 1) | current_bit) & 0x01FF;
-
-            // Здесь вызывается ваша проверенная логика состояний (SOF -> LEN -> PAYLOAD -> CRC)
-            // process_fsm_logical_layer(fsm.rx_fifo);
-            printf ("Current fifo: %d\n", fsm.rx_fifo );
+            //fsm.rx_fifo = ((fsm.rx_fifo << 1) | current_bit) & 0x01FF;
+            //printf ("Current fifo: %d\n", fsm.rx_fifo );
+        	process_incoming_bit(current_bit); /* протокольный FSM */
         }
 
         goertzel_timer = 0; // Сброс таймера сетки до следующего символа

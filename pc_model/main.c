@@ -43,19 +43,85 @@ void dumb_dump_wav (const char *filename, int16_t *data, size_t length) {
     fclose(f_out);
 }
 
+/**
+ * Simulates a brutal, noisy PLC electrical wire environment.
+ * Expects a standard 10-bit simulated ADC input sample (0..1023).
+ * Returns a corrupted 10-bit sample reflecting real wire conditions.
+ */
+uint16_t apply_realistic_plc_noise(uint16_t clean_sample, int noise_level) {
+    // 1. Переводим в знаковый диапазон относительно центра 511
+    int32_t signal = (int32_t)clean_sample - 511;
+
+    // 2. Генерируем белый шум по Центральной Предельной Теореме
+    // (сумма случайных величин дает красивое Гауссово распределение)
+    int32_t awgn = 0;
+    if (noise_level > 0) {
+        for (int i = 0; i < 4; i++) {
+            awgn += (rand() % noise_level) - (noise_level / 2);
+        }
+        awgn /= 2; // Нормализуем размах шума
+    }
+
+    // 3. Подмешиваем шум к нашему мощному сигналу
+    signal += awgn;
+
+    // 4. Жесткое ограничение под 10-битный диапазон АЦП (Clipping guard)
+    if (signal > 512)  signal = 512;
+    if (signal < -511) signal = -511;
+
+    // 5. Возвращаем как беззнаковое значение АЦП
+    return (uint16_t)(signal + 511);
+}
+
+/**
+ * Подмешивает чистый белый шум к 16-битному знаковому PCM сигналу.
+ * noise_amplitude задает размах шума в диапазоне 16-битного звука.
+ * Рекомендуемые значения:
+ *   0     - лабораторный чистый сигнал
+ *   2000  - легкое шипение
+ *   8000  - плотный шум
+ *   15000 - жестокий грохот, сигнал на грани уничтожения
+ */
+int16_t apply_pcm_noise_16bit(int16_t clean_sample, int32_t noise_amplitude) {
+    int32_t mixed_signal = clean_sample;
+
+    if (noise_amplitude > 0) {
+        // Суммируем 4 случайных числа для идеального Гауссова распределения шума
+        int32_t noise = 0;
+        for (int i = 0; i < 4; i++) {
+            noise += (rand() % noise_amplitude) - (noise_amplitude / 2);
+        }
+        noise /= 2; // Нормализуем амплитуду
+
+        mixed_signal += noise;
+    }
+
+    // Жесткое ограничение (Clipping) под стандартный 16-битный WAV-контейнер
+    if (mixed_signal > 32767)  mixed_signal = 32767;
+    if (mixed_signal < -32768) mixed_signal = -32768;
+
+    return (int16_t)mixed_signal;
+}
+
 #define TOTAL_TEST_SAMPLES 5000 // High enough budget to capture all 71 bits * 32 samples
 
 void generate_test_signal_file(void) {
     int16_t wav_buffer[TOTAL_TEST_SAMPLES];
     int recorded_samples = 0;
     int freq_index;
-    int16_t sample;
+    int16_t clean_sample, dirty_sample;
+    uint16_t adc_input_10bit;
+    int noise_severity = 2;
+    int spike_rate = 5;
+
+    int32_t current_noise_level = 6000;
 
     // Initialize our deterministic FSM packet stack
-    modem_tx_start(3); // Start with 2 bytes of preamble
+    modem_tx_start(2); // Start with 2 bytes of preamble
 
     for (int i = 0; i < TOTAL_TEST_SAMPLES; i++) {
-    	sample = (i < 103) ? 511: get_next_tabular_sample_10bit();
+    	clean_sample = (i < 103) ? 511: get_next_tabular_sample_10bit();
+    	dirty_sample = apply_pcm_noise_16bit(clean_sample, current_noise_level) + 4000; /* катастрофический DC-сдвиг */
 
 #if 0
         if ((freq_index = process_goertzel_sample_10bit (sample)) >= 0) {
@@ -63,14 +129,15 @@ void generate_test_signal_file(void) {
         }
 #endif
 #if 1
-        process_adc_sample_stream (sample);
+        adc_input_10bit = (uint16_t)((dirty_sample >> 6) + 511);
+        process_adc_sample_stream (adc_input_10bit);
 #endif
 
         // If transmission completes entirely, we fill the remaining budget with silence
-        if (tx_state == TX_END && sample == 0) {
+        if (tx_state == TX_END && dirty_sample == 0) {
             wav_buffer[i] = 0;
         } else {
-            wav_buffer[i] = sample;
+            wav_buffer[i] = adc_input_10bit*8;
             recorded_samples = i; // Track the exact endpoint of the real signal
         }
     }

@@ -5,6 +5,12 @@
 
 #include "fixed_point.h"
 
+// 1. АБСОЛЮТНЫЙ SQUELCH (Критерий наличия несущей)
+// Для 10-битного АЦП при сдвиге >> 14 на плато полезного сигнала total_energy
+// обычно составляет несколько тысяч единиц. В пустом белом шуме (уровня 6000)
+// она упадет значительно ниже. Выставим порог отсечения, например, в 200 единиц.
+#define ABSOLUTE_MIN_ENERGY 90
+
 // Goertzel state structures for our 3 frequencies
 typedef struct {
     int32_t v1;
