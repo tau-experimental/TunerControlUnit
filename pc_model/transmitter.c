@@ -67,7 +67,7 @@ int      tx_cycles_left = 0;
 int      tx_bit_idx = 0; // Счётчик бит внутри текущей 9-битной посылки (0..8)
 int      tx_current_word_len = 8; // По умолчанию шлём обычные 8-битные байты
 #define TEST_PAYLOAD_LENGTH	4
-uint8_t tx_payload[TEST_PAYLOAD_LENGTH] = {0xAA, 0x55, 0x22, 0x77};
+uint8_t tx_payload[TEST_PAYLOAD_LENGTH] = {0xBA, 0xAD, 0xF0, 0x0D};
 int     tx_payload_byte_idx = 0;
 uint8_t tx_running_crc = 0;
 
@@ -205,12 +205,15 @@ int sample_in_symbol_counter = 0;
 // Формула: step = (2^32 * F_bin) / F_sampling
 // F0 (Bin 4 = 1000 Гц), F1 (Bin 5 = 1250 Гц), F2 (Bin 6 = 1500 Гц)
 const uint32_t DDS_STEPS[3] = {
-    //536870912,  // F0 (1000 Гц)
-    //671088640,  // F1 (1250 Гц)
-    //805306368   // F2 (1500 Гц)
+#ifdef DOWNLINK
 		DDS_TUNING_WORD(1000),
 		DDS_TUNING_WORD((1000 + 2000)/2),
 		DDS_TUNING_WORD(2000)
+#else
+		DDS_TUNING_WORD(500),
+		DDS_TUNING_WORD(750),
+		DDS_TUNING_WORD(1000)
+#endif
 };
 
 // 256-point 10-bit Sine Lookup Table (Centered at 511, peak amplitude ~200)

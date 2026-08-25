@@ -103,7 +103,7 @@ int16_t apply_pcm_noise_16bit(int16_t clean_sample, int32_t noise_amplitude) {
     return (int16_t)mixed_signal;
 }
 
-#define TOTAL_TEST_SAMPLES 5000 // High enough budget to capture all 71 bits * 32 samples
+#define TOTAL_TEST_SAMPLES 15000 // High enough budget to capture all 71 bits * 32 samples
 
 void generate_test_signal_file(void) {
     int16_t wav_buffer[TOTAL_TEST_SAMPLES];
@@ -121,7 +121,9 @@ void generate_test_signal_file(void) {
 
     for (int i = 0; i < TOTAL_TEST_SAMPLES; i++) {
     	clean_sample = (i < 103) ? 511: get_next_tabular_sample_10bit();
-    	dirty_sample = apply_pcm_noise_16bit(clean_sample, current_noise_level) + 4000; /* катастрофический DC-сдвиг */
+    	//dirty_sample = apply_pcm_noise_16bit(clean_sample, current_noise_level) + 4000; /* катастрофический DC-сдвиг */
+    	//dirty_sample = clean_sample;
+    	dirty_sample = apply_pcm_noise_16bit(clean_sample, current_noise_level);
 
 #if 0
         if ((freq_index = process_goertzel_sample_10bit (sample)) >= 0) {

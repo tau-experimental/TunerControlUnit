@@ -4,8 +4,9 @@
 #include <inttypes.h>
 
 #define FS 8000
-#define SYMBOL_LEN 32
-#define EXPECTED_SYMBOL_LEN 32
+//#define SYMBOL_LEN 32
+#define SYMBOL_LEN 64
+#define EXPECTED_SYMBOL_LEN SYMBOL_LEN
 #define MAX_PAYLOAD 16
 
 #define BITS_PER_BYTE 9  /* 8 бит данных + 1 бит четности */

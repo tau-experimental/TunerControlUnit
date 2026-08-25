@@ -10,8 +10,18 @@ static int goertzel_sample_count = 0;
 static int goertzel_timer = 0;
 static int cascade_timer = 0;
 
+static const int16_t GOERTZEL_COEFFS[3] = {
+#ifdef DOWNLINK
 // Optimized Q12 Coefficients: 5793 (1000Hz), 3135 (1500Hz), 0 (2000Hz)
-static const int16_t GOERTZEL_COEFFS[3] = {5793, 3135, 0};
+		5793,
+		3135,
+		0
+#else
+			7568,
+			6811,
+			5793
+#endif
+};
 
 int8_t process_goertzel_sample_10bit(uint16_t sample_10bit) {
     // 1. Нормализуем 10-битный вход АЦП относительно центра 511
@@ -318,9 +328,11 @@ void process_adc_sample_stream(uint16_t sample_10bit) {
     	// Каждые 8 сэмплов (четверть символа) мы оцениваем промежуточную энергию.
         // Это не дает фильтру "залипать" на старой частоте и позволяет четко видеть фронты.
     	// Надо сделать: два каскада (g_state_A и g_state_B) со сдвигом фаз на 16 сэмплов
-    	if (cascade_timer % 16 == 0) {
+    	//if (cascade_timer % 16 == 0) {
+    	if (cascade_timer % 32 == 0) {
             //goertzel_timer = 0; // Сброс локального таймера окна поиска
-    		active_cascade = (cascade_timer % 32 == 0) ? g_state_A : g_state_B;
+    		//active_cascade = (cascade_timer % 32 == 0) ? g_state_A : g_state_B;
+    		active_cascade = (cascade_timer % 64 == 0) ? g_state_A : g_state_B;
 
             int32_t max_energy = -1;
             int8_t current_freq = -1;
@@ -363,7 +375,8 @@ void process_adc_sample_stream(uint16_t sample_10bit) {
 					int delta_time = fsm.sample_counter - fsm.last_transition_time;
 					fsm.last_transition_time = fsm.sample_counter;
 
-					if (delta_time >= 24 && delta_time <= 40) {
+					//if (delta_time >= 24 && delta_time <= 40) {
+					if (delta_time >= 48 && delta_time <= 80) {
 						fsm.sync_confidence++;
 						fsm.refined_symbol_len = (fsm.refined_symbol_len + delta_time) / 2;
 
@@ -374,7 +387,21 @@ void process_adc_sample_stream(uint16_t sample_10bit) {
 							printf("[FSM LOCK] ===> ЧАСЫ ЗАХВАЧЕНЫ МАТЕМАТИЧЕСКИ! <===\n");
 							fsm.state = RXSTATE_WAIT_TRAP;
 							in_packet = 1;
+
+							// СТРАХОВКА 1: Прыгаем строго в центр ("на плато") следующего символа.
 							goertzel_timer = fsm.refined_symbol_len / 2;
+							// СТРАХОВКА 2: Фиксируем текущего победителя как ЖЕСТКУЮ и чистую опору
+							// для дифференциального декодера. Предыдущий хаотичный шум стирается!
+							fsm.last_raw_freq = current_freq;
+
+							// СТРАХОВКА 3: Полностью обнуляем ВСЕ накопители Гёрцеля обоих каскадов (А и Б).
+							// Мы стираем "память" фильтров о переходных процессах преамбулы.
+							// Следующие 64 сэмпла будут копиться с абсолютно чистого листа!
+							for (int f = 0; f < 3; f++) {
+								g_state_A[f].v1 = 0; g_state_A[f].v2 = 0;
+								g_state_B[f].v1 = 0; g_state_B[f].v2 = 0;
+								g_state_A[f].v1 = 0;   g_state_A[f].v2 = 0; // И основного каскада Фазы 1
+							}
 						}
 					} else {
 						// Дельта мусорная — значит, это был ложный чих.
