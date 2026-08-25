@@ -66,8 +66,8 @@ uint8_t  tx_parity_bit = 0;
 int      tx_cycles_left = 0;
 int      tx_bit_idx = 0; // Счётчик бит внутри текущей 9-битной посылки (0..8)
 int      tx_current_word_len = 8; // По умолчанию шлём обычные 8-битные байты
-#define TEST_PAYLOAD_LENGTH	4
-uint8_t tx_payload[TEST_PAYLOAD_LENGTH] = {0xBA, 0xAD, 0xF0, 0x0D};
+#define TEST_PAYLOAD_LENGTH	8
+uint8_t tx_payload[TEST_PAYLOAD_LENGTH] = {0xBA, 0xAD, 0xF0, 0x0D, 0x00, 0xFF, 0x0F, 0x33 };
 int     tx_payload_byte_idx = 0;
 uint8_t tx_running_crc = 0;
 

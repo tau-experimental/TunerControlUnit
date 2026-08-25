@@ -389,7 +389,9 @@ void process_adc_sample_stream(uint16_t sample_10bit) {
 							in_packet = 1;
 
 							// СТРАХОВКА 1: Прыгаем строго в центр ("на плато") следующего символа.
-							goertzel_timer = fsm.refined_symbol_len / 2;
+							//goertzel_timer = fsm.refined_symbol_len / 2;
+							//cascade_timer = goertzel_timer;
+							cascade_timer = goertzel_timer = 0;
 							// СТРАХОВКА 2: Фиксируем текущего победителя как ЖЕСТКУЮ и чистую опору
 							// для дифференциального декодера. Предыдущий хаотичный шум стирается!
 							fsm.last_raw_freq = current_freq;
@@ -400,7 +402,6 @@ void process_adc_sample_stream(uint16_t sample_10bit) {
 							for (int f = 0; f < 3; f++) {
 								g_state_A[f].v1 = 0; g_state_A[f].v2 = 0;
 								g_state_B[f].v1 = 0; g_state_B[f].v2 = 0;
-								g_state_A[f].v1 = 0;   g_state_A[f].v2 = 0; // И основного каскада Фазы 1
 							}
 						}
 					} else {
@@ -470,6 +471,7 @@ void process_adc_sample_stream(uint16_t sample_10bit) {
             current_state = STATE_SEARCH_PREAMBLE;
             fsm.sync_confidence = 0;
             goertzel_timer = 0;
+            cascade_timer = 0;
             in_packet = 0;
             return;
         }
@@ -486,5 +488,6 @@ void process_adc_sample_stream(uint16_t sample_10bit) {
         }
 
         goertzel_timer = 0; // Сброс таймера сетки до следующего символа
+        cascade_timer = 0;
     }
 }
