@@ -5,22 +5,26 @@
 
 #include "fixed_point.h"
 
+// Goertzel state structures for our 3 frequencies
 typedef struct {
-    fixed_t coeff;
-    int32_t q0, q1, q2;
-    int count;
-    int len;
-} Goertzel_Fx;
+    int32_t v1;
+    int32_t v2;
+} GoertzelState_t;
 
-void goertzel_fx_init(Goertzel_Fx *g, double target_freq, int len);
-void goertzel_fx_reset(Goertzel_Fx *g);
-fixed_t goertzel_fx_process(Goertzel_Fx *g, fixed_t sample);
-fixed_t goertzel_block_process(Goertzel_Fx *g, fixed_t sample);
+// Порог подбирается экспериментально для 10-бит (например, если размах ~200,
+// то пиковая энергия Гёрцеля будет в районе нескольких тысяч или десятков тысяч).
+#define SIGNAL_THRESHOLD  1000
+/* Если max_energy < SIGNAL_THRESHOLD, приёмник обязан принудительно
+ * выставлять freq_idx = -1 (сигнала нет) и сбрасывать автомат в состояние поиска. */
 
-fixed_t apply_hard_limiter(int adc_sample);
+// Модифицируем вывод Гёрцеля, чтобы он отдавал структуру
+typedef struct {
+    int8_t freq_idx;
+    int32_t energy;
+} GoertzelResult_t;
 
-/* Обновленный прототип декодера (внутренняя обработка полностью на fixed_t) */
-int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out_payload);
-int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned char *out_payload);
+void process_incoming_bit(uint8_t incoming_bit);
+int8_t process_goertzel_sample_10bit(uint16_t sample_10bit);
+void process_adc_sample_stream(uint16_t sample_10bit);
 
 #endif /* RECEIVER_H */

@@ -1,13 +1,16 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+#include <inttypes.h>
+
 #define FS 8000
 #define SYMBOL_LEN 32
+#define EXPECTED_SYMBOL_LEN 32
 #define MAX_PAYLOAD 16
 
 #define BITS_PER_BYTE 9  /* 8 бит данных + 1 бит четности */
 
-#define PREAMBLE_BYTE 0xAA
+#define PREAMBLE_BYTE 0x55
 #define SOF_BYTE      0x7E
 
 #ifndef M_PI
@@ -35,6 +38,8 @@ typedef struct {
     unsigned int subchunk2Size;
 } WavHeader;
 #pragma pack(pop)
+
+uint8_t odd(uint8_t b);
 
 unsigned char update_crc8(unsigned char crc, unsigned char data);
 void byte_to_symbols(unsigned char b, unsigned char *syms);

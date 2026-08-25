@@ -5,432 +5,421 @@
 #include <string.h>
 #include <math.h>
 
-void goertzel_fx_init(Goertzel_Fx *g, double target_freq, int len) {
-    double k = ((double)len * target_freq) / (double)FS;
-    g->coeff = TO_FX(2.0 * cos(2.0 * M_PI * k / (double)len));
-    g->q0 = 0; g->q1 = 0; g->q2 = 0;
-    g->count = 0;
-    g->len = len;
-}
+static GoertzelState_t g_state[3];
+static int goertzel_sample_count = 0;
+static int goertzel_timer = 0;
 
-void goertzel_fx_reset(Goertzel_Fx *g) {
-    g->q0 = 0; g->q1 = 0; g->q2 = 0;
-    g->count = 0;
-}
+// Optimized Q12 Coefficients: 5793 (1000Hz), 3135 (1500Hz), 0 (2000Hz)
+static const int16_t GOERTZEL_COEFFS[3] = {5793, 3135, 0};
 
-fixed_t goertzel_fx_process(Goertzel_Fx *g, fixed_t sample) {
-    g->q0 = sample + fx_mul(g->coeff, g->q1) - g->q2;
-    g->q2 = g->q1;
-    g->q1 = g->q0;
-    g->count++;
+int8_t process_goertzel_sample_10bit(uint16_t sample_10bit) {
+    // 1. Нормализуем 10-битный вход АЦП относительно центра 511
+    int32_t x = (int32_t)sample_10bit - 511;
 
-    if (g->count >= g->len) {
-        fixed_t q1_scaled = g->q1 >> 3;
-        fixed_t q2_scaled = g->q2 >> 3;
+    // 2. Основной цикл фильтра Гёрцеля
+    for (int f = 0; f < 3; f++) {
+        // Вычисляем обратную связь в Q12 формате: (coeff * v1) / 4096
+        int32_t feedback = (GOERTZEL_COEFFS[f] * g_state[f].v1) >> 12;
 
-        fixed_t q1_sq = fx_mul(q1_scaled, q1_scaled);
-        fixed_t q2_sq = fx_mul(q2_scaled, q2_scaled);
-        fixed_t coeff_q1_q2 = fx_mul(fx_mul(g->coeff, q1_scaled), q2_scaled);
-
-        fixed_t magnitude_sq = q1_sq + q2_sq - coeff_q1_q2;
-
-        goertzel_fx_reset(g);
-        return magnitude_sq;
+        int32_t v0 = x + feedback - g_state[f].v2;
+        g_state[f].v2 = g_state[f].v1;
+        g_state[f].v1 = v0;
     }
-    return -INT_TO_FX(1);
+
+    goertzel_sample_count++;
+
+    // 3. Граница символа: оцениваем энергии
+    if (goertzel_sample_count >= SYMBOL_LEN) {
+        goertzel_sample_count = 0;
+
+        int32_t max_energy = -1;
+        int8_t winner_index = 0;
+
+        for (int f = 0; f < 3; f++) {
+            // Вычисление квадрата амплитуды: E = v1^2 + v2^2 - (coeff * v1 * v2) >> 12
+            int64_t v1_sq = (int64_t)g_state[f].v1 * g_state[f].v1;
+            int64_t v2_sq = (int64_t)g_state[f].v2 * g_state[f].v2;
+            int64_t cross_term = ((int64_t)GOERTZEL_COEFFS[f] * g_state[f].v1 * g_state[f].v2) >> 12;
+
+            // Защита от переполнения: сдвигаем 64-битный результат в int32 диапазон.
+            // При 10-битном входе сдвиг >> 12 или >> 14 даст отличный контролируемый масштаб энергии.
+            int32_t energy = (int32_t)((v1_sq + v2_sq - cross_term) >> 12);
+
+            if (energy > max_energy) {
+                max_energy = energy;
+                winner_index = f;
+            }
+
+            // Обнуляем детекторы для следующего символа кадра
+            g_state[f].v1 = 0;
+            g_state[f].v2 = 0;
+        }
+
+        // Возвращаем чистый индекс частоты для дифференциального FSM-демодулятора
+        return winner_index;
+    }
+
+    return -1;
 }
 
-fixed_t goertzel_sliding_process(Goertzel_Fx *g, fixed_t sample, fixed_t old_sample) {
-    /* Для синхронного посимвольного анализа (Этап 3) убираем дифференциальный занос.
-       Работаем по классической формуле Гёрцеля: q0 = sample + coeff * q1 - q2 */
-    g->q0 = sample + fx_mul(g->coeff, g->q1) - g->q2;
-    g->q2 = g->q1;
-    g->q1 = g->q0;
+typedef enum { /* автомат приёмника */
+    RXSTATE_SEARCH_CLK,  // Слепой поиск фронтов преамбулы и калибровка часов
+    RXSTATE_WAIT_TRAP,    // Часы залочены, ждем маркер ловушки и SOF
+    RXSTATE_RECEIVE_DATA
+} RxState_t;
 
-    g->count++;
+// Структура автомата синхронизации
+typedef struct {
+    RxState_t state;
+    int32_t sample_counter;      // Абсолютный счетчик времени сэмпла
+    int32_t last_transition_time;// Время последнего обнаруженного фронта
+    int     refined_symbol_len;  // Уточненная длина символа (31, 32, 33...)
+    int     sync_confidence;     // Счетчик доверия фронтам
+    int8_t  last_raw_freq;       // Опора для фиксации смены частоты
+    int     bits_captured;       // Сколько бит вдвинуто в FIFO
+    uint16_t rx_fifo;            // 9-битный кольцевой буфер
+} RxModemFsm_t;
 
-    /* Вычисляем энергию, когда окно закрылось */
-    fixed_t q1_scaled = g->q1 >> 4;
-    fixed_t q2_scaled = g->q2 >> 4;
+static RxModemFsm_t fsm = {RXSTATE_SEARCH_CLK, 0, 0, EXPECTED_SYMBOL_LEN, 0, -1, 0, 0};
 
-    fixed_t q1_sq = fx_mul(q1_scaled, q1_scaled);
-    fixed_t q2_sq = fx_mul(q2_scaled, q2_scaled);
-    fixed_t coeff_q1_q2 = fx_mul(fx_mul(g->coeff, q1_scaled), q2_scaled);
-
-    return (q1_sq + q2_sq - coeff_q1_q2);
-}
 
 /*
- * КЛАССИЧЕСКИЙ БЛОЧНЫЙ ГЁРЦЕЛЬ (Идеален для жесткой сетки и АРУ меандра)
- * Не использует буфер истории, накапливает резонанс строго с нуля.
+ * Предполагаемая логика рааботы автомата приёма:
+ * 1) сначала ждём энергетику преамбулы: в канале может быть тишина или шум, но пока нет заметной
+ * энергии на частотах F0 и F2, продолжаем крутиться в ожидании.
+ * 2) появилось подозрение н преамбулу (переключающиеся частоты F0->F2->F0 - начинаем синхронизацию,
+ * сбрасывая таймер на каждом моменте, когда энергия на одной частоте оказываешься меньше, чем на другой.
+ * У этого компаратора должен быть гистерезис, как я понимаю.
+ * 3) принимаемые биты запихиваются в кольцевой буфер на 9 значений (для простоты:
+ *  байтовый, т.е. на один бит данных расходуется аж 8 бит памяти). С каждым новым сохранённым битом
+ *  проверяем нечётность. Пока преамбула продолжается, чётность будет принудительно некорректна,
+ *  т.к. это просто чередующиеся 0 и 1, но последняя посылка преамбулы должна быть сделана так, чтобы получился
+ *  байт 0x55, его odd = 1. Как только функция, следящая за кольцевым буфером, обнаруживает корректную нечётность
+ *  это считается за момент синхронизации.
+ * 4) передаатчик начинает работать с 8+1 посылками, формируя корректный odd бит для каждой.
+ * Первым передаётся байт 0x7E (просто так решили), если приёмник видит этот байт - значит, синхронизация
+ * это не случайное событие, а действительно данные (слишком маловероятное совпадение, но потом мы ещё проверим CRC8).
+ * 5) следующий байт = Length (от 0 до 16 байт).
+ * 6) последний байт = CRC8
+ * 7) если за этим байтом ещё что-то передётся, то это garble. Но вообще передатчик должен замолчать и дать время приёмнику
+ * на обработку пакета.
  */
-fixed_t goertzel_block_process(Goertzel_Fx *g, fixed_t sample) {
-    /* Чистая каноническая формула БИХ-резонатора */
-    g->q0 = sample + fx_mul(g->coeff, g->q1) - g->q2;
-    g->q2 = g->q1;
-    g->q1 = g->q0;
-    g->count++;
 
-    if (g->count >= g->len) {
-        /* Окно закрылось, вычисляем финальную энергию */
-        fixed_t q1_scaled = g->q1 >> 4;
-        fixed_t q2_scaled = g->q2 >> 4;
-
-        fixed_t q1_sq = fx_mul(q1_scaled, q1_scaled);
-        fixed_t q2_sq = fx_mul(q2_scaled, q2_scaled);
-        fixed_t coeff_q1_q2 = fx_mul(fx_mul(g->coeff, q1_scaled), q2_scaled);
-
-        return (q1_sq + q2_sq - coeff_q1_q2);
-    }
-    return -INT_TO_FX(1);
-}
-
-fixed_t apply_hard_limiter(int adc_sample) {
-    /*
-     * High-gain linear amplifier instead of pure square-wave clipping.
-     * We scale the small signal up by a factor of 4 to combat the -10 dB drop,
-     * but clip the absolute ceiling to prevent internal fixed-point overflow.
-     */
-    int scaled = adc_sample * 4;
-
-    if (scaled > 127)  scaled = 127;
-    if (scaled < -128) scaled = -128;
-
-    return INT_TO_FX(scaled) / 16; /* Clean, safe Q16.16 range */
-}
-
-int decode_fsk_wav(const char *filename, const double *freqs, unsigned char *out_payload) {
-    FILE *f_in;
-    WavHeader header;
-    int num_samples, total_bytes_in_file, idx, i, b, t;
-    short *samples;
-    Goertzel_Fx detectors[3];
-
-    if (!filename || !freqs || !out_payload) return -1;
-
-    f_in = fopen(filename, "rb");
-    if (!f_in) return -1;
-    if (fread(&header, sizeof(WavHeader), 1, f_in) != 1) { fclose(f_in); return -1; }
-
-    num_samples = header.subchunk2Size / 2;
-    samples = (short *)malloc(num_samples * sizeof(short));
-    if (fread(samples, sizeof(short), num_samples, f_in) != num_samples) { free(samples); fclose(f_in); return -1; }
-    fclose(f_in);
-
-    for (i = 0; i < 3; i++) {
-        goertzel_fx_init(&detectors[i], freqs[i], SYMBOL_LEN);
+/**
+ * Дифференциальный ЧМ-демодулятор.
+ * Принимает текущую победившую частоту (winner) и предыдущую частоту (ref).
+ * Возвращает декодированный бит (0 или 1). Если частоты совпали, возвращает 0xFF (ошибка).
+ */
+uint8_t demodulate_frequency_to_bit(uint8_t winner, uint8_t ref) {
+    int8_t delta = winner - ref;
+    if (delta < 0) {
+        delta += 3;
     }
 
-    total_bytes_in_file = num_samples / (SYMBOL_LEN * BITS_PER_BYTE);
-
-    unsigned char prev_decoded = 0;
-    int total_symbol_counter = 0;
-    int byte_idx = 0;
-
-    int payload_len = 0;
-    int payload_counter = 0;
-    unsigned char calc_crc = 0;
-    unsigned char rx_crc = 0;
-
-    printf("\n======================================================================\n");
-    printf("[ЦОС ТЕЛЕМЕТРИЯ] Анализ кадра: %s (Байт в файле: %d)\n", filename, total_bytes_in_file);
-    printf("======================================================================\n");
-
-    for (byte_idx = 0; byte_idx < total_bytes_in_file; byte_idx++) {
-        unsigned char assembled_byte = 0;
-        unsigned char rx_parity_bit = 0;
-        int bit_pos;
-
-        printf("\n--- Чтение байта №%d (SampleIdx старта: %d) ---\n", byte_idx, total_symbol_counter * SYMBOL_LEN);
-
-        for (bit_pos = 0; bit_pos < 9; bit_pos++) {
-            idx = total_symbol_counter * SYMBOL_LEN;
-            total_symbol_counter++;
-
-            fixed_t amplitudes[3] = {0, 0, 0};
-            fixed_t max_amp = -1;
-            int winner_sym = 0;
-
-            /* Принудительный сброс БИХ-резонаторов перед новым символом */
-            for (i = 0; i < 3; i++) {
-                goertzel_fx_reset(&detectors[i]);
-            }
-
-            /* Интегрируем 32 отсчета */
-            for (t = 0; t < SYMBOL_LEN; t++) {
-                int adc_sample = (int)samples[idx + t] / 256;
-                fixed_t fx_sample = apply_hard_limiter(adc_sample);
-
-                for (i = 0; i < 3; i++) {
-                    fixed_t res = goertzel_block_process(&detectors[i], fx_sample);
-                    if (res >= 0) {
-                        amplitudes[i] = res;
-                    }
-                }
-            }
-
-            /* Находим доминирующий спектральный пик */
-            for (i = 0; i < 3; i++) {
-                if (amplitudes[i] > max_amp) {
-                    max_amp = amplitudes[i];
-                    winner_sym = i;
-                }
-            }
-
-            /* Вычисляем относительный шаг вращения (дифференциальный декодер) */
-            unsigned char decoded_bit = descramble_bit(winner_sym, prev_decoded);
-
-            /* Вывод побитовой диагностики ЦОС-движка */
-            printf("  Символ %d/9 | E0(1000Hz):%6.1f | E1(1400Hz):%6.1f | E2(1800Hz):%6.1f | WIN: F%d | Шаг относительно F%d -> БИТ: %d\n",
-                   bit_pos + 1,
-                   FX_TO_DOUBLE(amplitudes[0]),
-                   FX_TO_DOUBLE(amplitudes[1]),
-                   FX_TO_DOUBLE(amplitudes[2]),
-                   winner_sym, prev_decoded, decoded_bit);
-
-            prev_decoded = winner_sym; /* Сохраняем непрерывность фазового кольца */
-
-            if (bit_pos < 8) {
-                assembled_byte |= (decoded_bit << (7 - bit_pos));
-            } else {
-                rx_parity_bit = decoded_bit;
-            }
-        }
-
-        /* Вычисляем локальный паритет от собранного байта */
-        unsigned char local_parity_bit = calculate_odd_parity(assembled_byte);
-        int parity_ok = (rx_parity_bit == local_parity_bit);
-
-        /* СТРОГО ТРЕБУЕМЫЙ ФОРМАТ ВЫВОДА: [ XX.P ] */
-        printf(" => ПОЛУЧЕН ПАКЕТ БАЙТА: [ %02X.%d ] | Локальный Odd Parity: %d -> %s\n",
-               assembled_byte, rx_parity_bit, local_parity_bit,
-               parity_ok ? "УСПЕХ (Чётность совпала)" : "КРИТИЧЕСКАЯ ОШИБКА ЧЁТНОСТИ!");
-
-        if (!parity_ok) {
-            printf("[FAIL] Прерывание кадра из-за сбоя чётности.\n");
-            free(samples);
-            return -2; /* Ошибка паритета */
-        }
-
-        /* Распределение байт по логическим ролям внутри кадра */
-        if (byte_idx == 0) {
-            printf("    [СЛУЖЕБНЫЙ] Байт распознан как маркер начала кадра SOF.\n");
-            if (assembled_byte != SOF_BYTE) { free(samples); return -1; }
-        }
-        else if (byte_idx == 1) {
-            payload_len = assembled_byte;
-            printf("    [СЛУЖЕБНЫЙ] Байт распознан как длина Payload: Ожидаем %d байт данных.\n", payload_len);
-            if (payload_len > MAX_PAYLOAD || payload_len <= 0) { free(samples); return -1; }
-        }
-        else if (byte_idx < 2 + payload_len) {
-            out_payload[payload_counter++] = assembled_byte;
-            calc_crc = update_crc8(calc_crc, assembled_byte);
-            printf("    [ДАННЫЕ] Сохранено в буфер полезной нагрузки. Текущий CRC-8: %02X\n", calc_crc);
-        }
-        else {
-            rx_crc = assembled_byte;
-            free(samples);
-
-            printf("\n--- ПРОВЕРКА КОНТРОЛЬНОЙ СУММЫ КАДРА ---\n");
-            printf("    Рассчитано приемником: 0x%02X\n", calc_crc);
-            printf("    Принято из линии (CRC):  0x%02X\n", rx_crc);
-
-            if (calc_crc == rx_crc) {
-                printf("=== КАДР ВЕРИФИЦИРОВАН УСПЕШНО ===\n");
-                return payload_counter;
-            } else {
-                printf("=== [FAIL] СБОЙ КОНТРОЛЬНОЙ СУММЫ ПАКЕТА (CRC МИСМАТЧ) ===\n");
-                return -3;
-            }
-        }
+    if (delta == 1) {
+        return 1; // Частота увеличилась (0->1, 1->2, 2->0)
+    } else if (delta == 2) {
+        return 0; // Частота уменьшилась (0->2, 2->1, 1->0)
     }
 
-    free(samples);
-    return -1;
+    return 0xFF; // Ошибка: частоты соседних посылок совпали (в нашем коде запрещено)
 }
 
-int decode_fsk_wav_dynamic(const char *filename, const double *freqs, unsigned char *out_payload) {
-    FILE *f_in;
-    WavHeader header;
-    int num_samples, rx_sym_count, in_packet, expected_symbols, payload_len, idx, i, t;
-    short *samples;
-    unsigned char *rx_symbols;
-    Goertzel_Fx detectors[3];
+typedef enum { /* автомат протокола */
+    STATE_SEARCH_PREAMBLE,
+    STATE_WAIT_SOF,
+	STATE_RECEIVE_LEN,
+    STATE_RECEIVE_DATA,
+	STATE_RECEIVE_CRC
+} FsmState;
 
-    fixed_t history_buffer[SYMBOL_LEN] = {0};
-    int history_idx = 0;
+// Переменные состояния (на CH32V003 это обычные глобальные/статические регистры)
+FsmState current_state = STATE_SEARCH_PREAMBLE;
+uint16_t rx_fifo = 0;
+int bit_counter = 0;
+int payload_length, payload_index;
+uint8_t payload[MAX_PAYLOAD];
+uint8_t rx_running_crc;
 
-    if (!filename || !freqs || !out_payload) return -1;
-    f_in = fopen(filename, "rb");
-    if (!f_in) return -1;
-    if (fread(&header, sizeof(WavHeader), 1, f_in) != 1) { fclose(f_in); return -1; }
+void process_incoming_bit(uint8_t incoming_bit) {
+    // Вдвигаем бит в наш 9-битный FIFO-регистр
+    rx_fifo = ((rx_fifo << 1) | incoming_bit) & 0x01FF;
 
-    num_samples = header.subchunk2Size / 2;
-    samples = (short *)malloc(num_samples * sizeof(short));
-    if (fread(samples, sizeof(short), num_samples, f_in) != num_samples) { free(samples); fclose(f_in); return -1; }
-    fclose(f_in);
+    printf ("%u ", incoming_bit);
 
-    for (i = 0; i < 3; i++) goertzel_fx_init(&detectors[i], freqs[i], SYMBOL_LEN);
-    rx_symbols = (unsigned char *)malloc(num_samples);
-    rx_sym_count = 0; in_packet = 0; expected_symbols = 9999; payload_len = 0;
+    switch (current_state) {
 
-    int bit_clock_synced = 0;
-    int last_winner = -1;
-    int transition_idx = -1;
-    int synced_symbol_counter = 0;
+        case STATE_SEARCH_PREAMBLE: {
+            uint8_t calculated_byte = (rx_fifo >> 1) & 0xFF;
+            uint8_t received_parity = rx_fifo & 0x01;
 
-    fixed_t ENERGY_THRESHOLD = INT_TO_FX(40);
+            // Жёсткий двойной критерий: и байт наш, и нечётность сошлась
+            if (calculated_byte == PREAMBLE_BYTE && odd(calculated_byte) == received_parity) {
+                printf("[FSM] Преамбула 0x55 подтверждена! Переходим в STATE_WAIT_SOF.\n");
 
-    printf("\n======================================================================\n");
-    printf("[ДИНАМИЧЕСКАЯ ТЕЛЕМЕТРИЯ] Слепой поиск в файле: %s\n", filename);
-    printf("======================================================================\n");
-
-    idx = 0;
-    while (idx < num_samples - SYMBOL_LEN) {
-        fixed_t amplitudes[3] = {0, 0, 0};
-        fixed_t max_amp = -1;
-        int winner_sym = 0;
-
-        for (i = 0; i < 3; i++) goertzel_fx_reset(&detectors[i]);
-
-        for (t = 0; t < SYMBOL_LEN; t++) {
-            int adc_sample = (int)samples[idx + t] / 256;
-            fixed_t fx_sample = apply_hard_limiter(adc_sample);
-
-            for (i = 0; i < 3; i++) {
-                fixed_t res = goertzel_block_process(&detectors[i], fx_sample);
-                if (res >= 0) amplitudes[i] = res;
+                current_state = STATE_WAIT_SOF;
+                bit_counter = 0; // Сбрасываем счётчик для накопления ровно 9 бит SOF
             }
+            break;
         }
 
-        for (i = 0; i < 3; i++) {
-            if (amplitudes[i] > max_amp) {
-                max_amp = amplitudes[i];
-                winner_sym = i;
-            }
-        }
+        case STATE_WAIT_SOF: {
+            bit_counter++;
 
-        /* ФАЗА 0: СЛЕПОЙ ПОИСК ПЕРЕКЛЮЧЕНИЙ ПРЕАМБУЛЫ */
-        if (!bit_clock_synced) {
-            if (max_amp > ENERGY_THRESHOLD) {
-                if (last_winner != -1 && winner_sym != last_winner) {
-                    if (transition_idx == -1) {
-                        transition_idx = idx;
-                    } else {
-                        int delta_time = idx - transition_idx;
-                        if (delta_time >= (SYMBOL_LEN - 3) && delta_time <= (SYMBOL_LEN + 3)) {
-                            printf("\n===> [CLOCK] Битовые часы зафиксированы! Отсчет: %d (Delta: %d) <===\n", idx, delta_time);
-                            bit_clock_synced = 1;
-                            synced_symbol_counter = 0;
+            // Ждём, пока вдвинутся ровно 9 бит следующего символа
+            if (bit_counter == 9) {
+                uint8_t calculated_byte = (rx_fifo >> 1) & 0xFF;
+                uint8_t received_parity = rx_fifo & 0x01;
+                uint8_t calc_parity = odd(calculated_byte);
 
-                            /* Прыгаем на пол-символа вперед в центр плато */
-                            idx += (SYMBOL_LEN / 2);
-                            last_winner = winner_sym;
-                            continue;
-                        } else {
-                            transition_idx = idx;
-                        }
-                    }
-                }
-                last_winner = winner_sym;
-            }
-            idx++;
-            continue;
-        }
+                // Проверяем маркер начала кадра SOF (0x7E) и его паритет
+                if ((calculated_byte == SOF_BYTE) && (calc_parity == received_parity)) {
+                    printf("[FSM] Маркер SOF (0x%02X) успешно принят! Синхронизация железобетонная.\n", calculated_byte);
+                    printf("[FSM] Переходим к приёму полей пакета.\n");
 
-        /* ФАЗА 1: ДИСКРЕТНЫЙ ПРИЕМ СИМВОЛОВ НА УДЕРЖАННЫХ ЧАСАХ */
-        synced_symbol_counter++;
-        unsigned char decoded_bit = descramble_bit(winner_sym, last_winner);
-
-        int bit_pos_in_byte = (synced_symbol_counter - 1) % BITS_PER_BYTE;
-
-        printf("  Шаг %3d | Бит %d/9 | E0:%5.1f | E1:%5.1f | E2:%5.1f | WIN:F%d (Ref:F%d) -> БИТ: %d\n",
-               synced_symbol_counter, bit_pos_in_byte + 1,
-               FX_TO_DOUBLE(amplitudes[0]), FX_TO_DOUBLE(amplitudes[1]), FX_TO_DOUBLE(amplitudes[2]),
-               winner_sym, last_winner, decoded_bit);
-
-        last_winner = winner_sym;
-        rx_symbols[rx_sym_count++] = decoded_bit;
-
-        /* Обработка по границам 9-битных посылок */
-        if (rx_sym_count >= BITS_PER_BYTE && rx_sym_count % BITS_PER_BYTE == 0) {
-            int byte_start_pos = rx_sym_count - BITS_PER_BYTE;
-            unsigned char assembled_byte = 0;
-
-            for (i = 0; i < 8; i++) {
-                assembled_byte |= (rx_symbols[byte_start_pos + i] << (7 - i));
-            }
-
-            unsigned char rx_parity = rx_symbols[byte_start_pos + 8];
-            unsigned char local_parity = calculate_odd_parity(assembled_byte);
-            int parity_ok = (rx_parity == local_parity);
-
-            printf(" => ДИНАМИЧЕСКИЙ БАЙТ: [ %02X.%d ] | Local Parity: %d -> %s\n",
-                   assembled_byte, rx_parity, local_parity,
-                   parity_ok ? "СОВПАЛ" : "ОШИБКА ЧЁТНОСТИ");
-
-            if (!parity_ok) {
-                if (!in_packet) {
-                    /* Фикс стабильности: в преамбуле из-за шума границы могут плавать.
-                       Вместо жесткого сброса часов, давайте просто пропустим битый байт преамбулы
-                       и продолжим идти по жесткой сетке! Настоящий МК никогда не сбрасывает таймер
-                       из-за одной ошибки четности в преамбуле! */
-                    printf("    [PREAMBLE WARN] Сбой паритета в преамбуле проигнорирован. Удерживаем часы.\n");
+                    current_state = STATE_RECEIVE_LEN;
+                    bit_counter = 0;
                 } else {
-                    printf("    [FAIL] КРИТИЧЕСКАЯ ОШИБКА ЧЁТНОСТИ ВНУТРИ ПАКЕ ТА! Сброс.\n");
-                    free(samples); free(rx_symbols); return -2;
+
+                    printf("[FSM] Ошибка! Вместо SOF прилетел мусор (0x%02X, parity = %d вместо %d). Сброс в поиск преамбулы.\n",
+                    		calculated_byte, received_parity, calc_parity);
+
+                    current_state = STATE_SEARCH_PREAMBLE;
                 }
             }
+            break;
+        };
 
-            if (!in_packet && assembled_byte == SOF_BYTE) {
-                in_packet = 1;
-                rx_sym_count = 0;
-                printf("\n   ===> [SYNC] Маркер кадра SOF (0x7E) обнаружен! Читаем Payload... <===\n");
-                idx += SYMBOL_LEN;
-                continue;
-            }
+        case STATE_RECEIVE_LEN: {
+            bit_counter++;
 
-            if (in_packet) {
-                if (rx_sym_count == BITS_PER_BYTE) {
-                    payload_len = assembled_byte;
-                    printf("   -> [PACKET] Ожидаемая длина Payload: %d байт\n", payload_len);
-                    if (payload_len > MAX_PAYLOAD || payload_len <= 0) {
-                        printf("    [ERROR] Битый байт длины, сброс автомата.\n");
-                        in_packet = 0; bit_clock_synced = 0; transition_idx = -1; rx_sym_count = 0; expected_symbols = 9999;
-                    } else {
-                        expected_symbols = (1 + payload_len + 1) * BITS_PER_BYTE;
-                    }
-                }
+            // Ждём, пока вдвинутся ровно 9 бит следующего символа
+            if (bit_counter == 9) {
+                uint8_t calculated_byte = (rx_fifo >> 1) & 0xFF;
+                uint8_t received_parity = rx_fifo & 0x01;
+                uint8_t calc_parity = odd(calculated_byte);
 
-                if (rx_sym_count >= expected_symbols) {
-                    unsigned char calc_crc = 0;
-                    int p_idx = BITS_PER_BYTE;
-                    int out_idx = 0;
+                if (calc_parity == received_parity) {
+                	payload_length = calculated_byte;
+                	payload_index = 0;
+                    printf("[FSM] LEN = %u\n", payload_length);
+                    printf("[FSM] Переходим к приёму данных пакета.\n");
+                    rx_running_crc = update_crc8 (0, payload_length);
 
-                    for (i = 0; i < payload_len; i++) {
-                        unsigned char b = 0;
-                        for (t = 0; t < 8; t++) b |= (rx_symbols[p_idx + t] << (7 - t));
-                        out_payload[out_idx++] = b;
-                        calc_crc = update_crc8(calc_crc, b);
-                        p_idx += BITS_PER_BYTE;
-                    }
+                    current_state = STATE_RECEIVE_DATA;
+                    bit_counter = 0;
+                } else {
+                    printf("[FSM] Сбой чётности в поле LEN (принято %d, ожидалось %d). Сброс в поиск преамбулы.\n",
+                    		received_parity, calc_parity);
 
-                    unsigned char rx_crc = 0;
-                    for (t = 0; t < 8; t++) rx_crc |= (rx_symbols[p_idx + t] << (7 - t));
-
-                    printf("\n--- ВЕРИФИКАЦИЯ КОНТРОЛЬНОЙ СУММЫ ДИНАМИЧЕСКОГО КАДРА ---\n");
-                    printf("    Рассчитано: 0x%02X | Принято: 0x%02X\n", calc_crc, rx_crc);
-
-                    free(samples); free(rx_symbols);
-                    if (calc_crc == rx_crc) return payload_len;
-                    return -3;
+                    current_state = STATE_SEARCH_PREAMBLE;
                 }
             }
+       }; break;
+
+        case STATE_RECEIVE_DATA: {
+            bit_counter++;
+            // Ждём, пока вдвинутся ровно 9 бит следующего символа
+            if (bit_counter == 9) {
+				uint8_t calculated_byte = (rx_fifo >> 1) & 0xFF;
+				uint8_t received_parity = rx_fifo & 0x01;
+				uint8_t calc_parity = odd(calculated_byte);
+
+				bit_counter = 0;
+				if (calc_parity == received_parity) {
+					payload[payload_index] = calculated_byte;
+					rx_running_crc = update_crc8 (rx_running_crc, calculated_byte);
+					printf("[FSM] Payload[%d] = 0x%02X, ", payload_index, payload[payload_index]);
+					if (++payload_index < payload_length) { /* приняты ещё не все байты */
+						current_state = STATE_RECEIVE_DATA; /* замыкаемся обратно */
+						printf("продолжаем приём данных пакета.\n");
+					} else {
+						current_state = STATE_RECEIVE_CRC; /* ждём CRC */
+						printf("приём данных пакета завершён, переходим к приёму CRC.\n");
+	                };
+				} else {
+					printf("[FSM] Сбой чётности в байте %d (принято %d, ожидалось %d). Сброс в поиск преамбулы.\n",
+							payload_index, received_parity, calc_parity);
+
+					current_state = STATE_SEARCH_PREAMBLE;
+				};
+            }
+        }; break;
+
+        case STATE_RECEIVE_CRC: {
+        	bit_counter++;
+            if (bit_counter == 9) {
+				uint8_t calculated_byte = (rx_fifo >> 1) & 0xFF;
+				uint8_t received_parity = rx_fifo & 0x01;
+				uint8_t calc_parity = odd(calculated_byte);
+
+				bit_counter = 0;
+				if (calc_parity == received_parity) {
+					printf("Проверка CRC: " );
+					if (rx_running_crc == calculated_byte) { /* CRC сошлись! */
+						current_state = STATE_SEARCH_PREAMBLE; /* ToDo: обработка данных пакета */
+						printf("успешно (0x%02X)! ToDo: обработать пакет\n", rx_running_crc);
+					} else {
+						current_state = STATE_SEARCH_PREAMBLE; /* Сбой CRC: перезапрашиваем пакет или просто сбрасываем автомат */
+						printf("сбой, вычислено 0x%02X, а в пакете указано 0x%02X.\n", rx_running_crc, calculated_byte);
+					};
+				};
+            };
+        	//current_state = STATE_SEARCH_PREAMBLE; // ToDo; пока просто сбрасываем автомат
+        }; break;
+
+        default: { /* невозможное состояние: сбрасываем автомат */
+        	current_state = STATE_SEARCH_PREAMBLE;
         }
+    }
+}
 
-        idx += SYMBOL_LEN;
+/**
+ * Обработка одного потокового 10-битного сэмпла из АЦП (0..1023)
+ */
+void process_adc_sample_stream(uint16_t sample_10bit) {
+    fsm.sample_counter++;
+    goertzel_timer++;
+
+    // 1. Накапливаем текущий сэмпл в фильтрах Гёрцеля
+    int32_t x = (int32_t)sample_10bit - 511;
+    for (int f = 0; f < 3; f++) {
+        int32_t feedback = (GOERTZEL_COEFFS[f] * g_state[f].v1) >> 12;
+        int32_t v0 = x + feedback - g_state[f].v2;
+        g_state[f].v2 = g_state[f].v1;
+        g_state[f].v1 = v0;
     }
 
-    free(samples); free(rx_symbols);
-    return -1;
+    // =========================================================================
+    // РЕЖИМ 0: СЛЕПОЙ ПОИСК ФРОНТОВ (Синхронизация по меандру преамбулы)
+    // =========================================================================
+    if (fsm.state == RXSTATE_SEARCH_CLK) {
+
+        // Каждые 8 сэмплов (четверть символа) мы оцениваем промежуточную энергию.
+        // Это не дает фильтру "залипать" на старой частоте и позволяет четко видеть фронты.
+        if (goertzel_timer >= 8) {
+            goertzel_timer = 0; // Сброс локального таймера окна поиска
+
+            int32_t max_energy = -1;
+            int8_t current_freq = -1;
+
+            for (int f = 0; f < 3; f++) {
+                int64_t v1_sq = (int64_t)g_state[f].v1 * g_state[f].v1;
+                int64_t v2_sq = (int64_t)g_state[f].v2 * g_state[f].v2;
+                int64_t cross_term = ((int64_t)GOERTZEL_COEFFS[f] * g_state[f].v1 * g_state[f].v2) >> 12;
+                int32_t energy = (int32_t)((v1_sq + v2_sq - cross_term) >> 12);
+
+                if (energy > max_energy) {
+                    max_energy = energy;
+                    current_freq = f;
+                }
+
+                // ВАЖНО: Сбрасываем накопители! Нам нужна мгновенная реакция
+                // на текущие 8 сэмплов, а не история за весь прошлый век.
+                g_state[f].v1 = 0;
+                g_state[f].v2 = 0;
+            }
+
+            // Вывод для контроля энергий в Audacity / консоли
+            // printf("Энергия: %d, Частота candidate: %d\n", max_energy, current_freq);
+
+            // Защита от шума (Squelch) по промежуточной энергии
+            if (max_energy < (SIGNAL_THRESHOLD / 4)) {
+                fsm.sync_confidence = 0;
+                fsm.last_raw_freq = -1;
+                return;
+            }
+
+            // Проверяем физическое переключение частоты
+            if (fsm.last_raw_freq != -1 && current_freq != fsm.last_raw_freq) {
+
+				// ВАЖНОЕ ДОПОЛНЕНИЕ: Игнорируем переключение, если энергия "победителя"
+				// ничтожно мала (это просто шум на пустом месте). Порог для 8 сэмплов
+				// должен быть пропорционально меньше, например, SIGNAL_THRESHOLD / 8
+				if (max_energy > (SIGNAL_THRESHOLD / 8)) {
+
+					int delta_time = fsm.sample_counter - fsm.last_transition_time;
+					fsm.last_transition_time = fsm.sample_counter;
+
+					if (delta_time >= 24 && delta_time <= 40) {
+						fsm.sync_confidence++;
+						fsm.refined_symbol_len = (fsm.refined_symbol_len + delta_time) / 2;
+
+						printf("[FSM SYNC] НАСТОЯЩИЙ ФРОНТ! Дельта: %d. Сетка: %d. Уверенность: %d/3\n",
+							   delta_time, fsm.refined_symbol_len, fsm.sync_confidence);
+
+						if (fsm.sync_confidence >= 3) {
+							printf("[FSM LOCK] ===> ЧАСЫ ЗАХВАЧЕНЫ МАТЕМАТИЧЕСКИ! <===\n");
+							fsm.state = STATE_WAIT_SOF;
+							goertzel_timer = fsm.refined_symbol_len / 2;
+						}
+					} else {
+						// Дельта мусорная — значит, это был ложный чих.
+						// Сбрасываем уверенность, только если дельта действительно аномальная
+						fsm.sync_confidence = 0;
+					}
+
+					// Перезаписываем опору частоты только тогда, когда переключение БЫЛО ВАЛИДНЫМ по энергии
+					fsm.last_raw_freq = current_freq;
+				}
+			} else {
+				// Если частота не изменилась, но энергия хорошая,
+				// мы просто подтверждаем текущую стабильную опору
+				if (max_energy > (SIGNAL_THRESHOLD / 8)) {
+					fsm.last_raw_freq = current_freq;
+				}
+			}
+        }
+        return;
+    }
+
+    // =========================================================================
+    // РЕЖИМ 1: РАБОТА ПО УТОЧНЕННЫМ БИТОВЫМ ЧАСАМ (Дискретный прием)
+    // =========================================================================
+    // Мы вычисляем результат строго по нашей следящей сетке времени (goertzel_timer)
+    if (goertzel_timer >= fsm.refined_symbol_len) {
+        // РЕ-СИНХРОНИЗАЦИЯ (DPLL подстройка):
+        // Если реальный физический фронт сместился, мы можем скорректировать goertzel_timer на +/- 1 сэмпл.
+        // Для этого проверяем смену частоты. Если она произошла чуть раньше/позже — подтягиваем сетку.
+
+        int32_t max_energy = -1;
+        int8_t winner_freq = 0;
+
+        for (int f = 0; f < 3; f++) {
+            int64_t v1_sq = (int64_t)g_state[f].v1 * g_state[f].v1;
+            int64_t v2_sq = (int64_t)g_state[f].v2 * g_state[f].v2;
+            int64_t cross_term = ((int64_t)GOERTZEL_COEFFS[f] * g_state[f].v1 * g_state[f].v2) >> 12;
+            int32_t energy = (int32_t)((v1_sq + v2_sq - cross_term) >> 12);
+
+            if (energy > max_energy) {
+                max_energy = energy;
+                winner_freq = f;
+            }
+            // Чистим накопители для следующего такта
+            g_state[f].v1 = 0; g_state[f].v2 = 0;
+        }
+
+        // Аппаратный Squelch внутри пакета
+        if (max_energy < (SIGNAL_THRESHOLD / 2)) {
+            printf("[FSM DROP] Сигнал упал ниже порога. Возврат в поиск.\n");
+            fsm.state = RXSTATE_SEARCH_CLK;
+            fsm.sync_confidence = 0;
+            return;
+        }
+
+        // Вычисляем бит через дифференциальный демодулятор («треугольник»)
+        uint8_t current_bit = demodulate_frequency_to_bit(winner_freq, fsm.last_raw_freq);
+        fsm.last_raw_freq = winner_freq;
+
+        if (current_bit != 0xFF) {
+            // Вдвигаем бит в наш 9-битный FIFO
+            fsm.rx_fifo = ((fsm.rx_fifo << 1) | current_bit) & 0x01FF;
+
+            // Здесь вызывается ваша проверенная логика состояний (SOF -> LEN -> PAYLOAD -> CRC)
+            // process_fsm_logical_layer(fsm.rx_fifo);
+            printf ("Current fifo: %d\n", fsm.rx_fifo );
+        }
+
+        goertzel_timer = 0; // Сброс таймера сетки до следующего символа
+    }
 }

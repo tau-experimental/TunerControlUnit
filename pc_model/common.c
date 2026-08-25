@@ -3,6 +3,13 @@
 const double FREQ_DOWNLINK[FREQ_BANDS] = {1000.0, 1400.0, 1800.0};
 const double FREQ_UPLINK[FREQ_BANDS]   = {350.0,  750.0,  1150.0};
 
+uint8_t odd(uint8_t b) {
+    b ^= b >> 4;
+    b ^= b >> 2;
+    b ^= b >> 1;
+    return !(b & 1); // Инвертируем для получения Odd Parity
+}
+
 unsigned char update_crc8(unsigned char crc, unsigned char data) {
     int i;
     crc ^= data;
@@ -14,6 +21,21 @@ unsigned char update_crc8(unsigned char crc, unsigned char data) {
         }
     }
     return crc;
+}
+
+/* Инкременциальный расчет CRC-8 (Полином: 0x07) для одного байта.
+ * На входе - накопленное значение (current_crc) и новый байт данных (data_byte).
+ */
+uint8_t compute_crc8_CCITT (uint8_t current_crc, uint8_t data_byte) {
+	current_crc ^= data_byte;
+	for (int bit = 0; bit < 8; bit++) {
+		if (current_crc & 0x80) {
+			current_crc = (current_crc << 1) ^ 0x07;
+		} else {
+			current_crc <<= 1;
+		}
+    }
+    return current_crc;
 }
 
 void byte_to_symbols(unsigned char b, unsigned char *syms) {
